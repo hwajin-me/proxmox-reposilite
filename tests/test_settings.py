@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ CT = (ROOT / "ct/reposilite.sh").read_text()
 SETTINGS = CT.split("\nstart\n", 1)[1].split("\nbuild_container\n", 1)[0]
 HARNESS = """
 msg_error() { echo "$*" >&2; }
+msg_info() { echo "$*" >&2; }
 ensure_dependencies() { command -v jq >/dev/null; }
 prompt_confirm() { [[ "$1" == "Customize Reposilite application settings?" ]]; }
 prompt_input() { printf '%s' "${2}"; }
@@ -119,6 +121,29 @@ class SettingsTests(unittest.TestCase):
             with self.subTest(value=value):
                 result, _ = self.run_settings(var_repositories_json=json.dumps([value]))
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_private_profile_load_and_ldap_manager_name(self):
+        ldap = {"enabled": True, "hostname": "ldap.example.test", "baseDn": "dc=example,dc=test",
+                "searchUserDn": "cn=reader,dc=example,dc=test", "searchUserPassword": "private-fixture"}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "profile.json"
+            path.write_text(json.dumps({"ldap": ldap}))
+            path.chmod(0o600)
+            result, values = self.run_settings(var_integrations_file=str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(values["var_admin_user"], r"^local-manager-[a-f0-9]{12}$")
+        self.assertTrue(json.loads(values["var_integrations_json"])["ldap"]["enabled"])
+        self.assertNotIn(b"private-fixture", result.stderr)
+
+    def test_native_s3_repository_override(self):
+        repository = {"id": "cloud", "visibility": "PRIVATE", "storageProvider": {
+            "type": "s3", "bucketName": "maven-artifacts", "region": "auto",
+            "accessKey": "fixture", "secretKey": "fixture", "sharedBucket": True}}
+        result, _ = self.run_settings(var_repositories_json=json.dumps([repository]))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        repository["storageProvider"]["sharedBucket"] = "yes"
+        result, _ = self.run_settings(var_repositories_json=json.dumps([repository]))
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

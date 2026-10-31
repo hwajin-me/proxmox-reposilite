@@ -21,6 +21,11 @@ setup_alpine() {
   # fetch_and_deploy_from_url extracts ZIPs, which would unpack a runnable JAR.
   RELEASE="${APPLICATION_VERSION:-$(get_latest_github_release "dzikoysk/reposilite")}"
   [[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { msg_error "Invalid Reposilite release"; exit 1; }
+  if jq -e '.storage.type == "s3"' <<<"${var_integrations_json:-null}" >/dev/null ||
+    jq -e 'any(.[]; .storageProvider.type == "s3")' <<<"${var_repositories_json:-[]}" >/dev/null; then
+    IFS=. read -r _major _minor _patch <<<"$RELEASE"
+    (( _major * 1000000 + _minor * 1000 + _patch >= 3006005 )) || { msg_error "S3 profiles require Reposilite 3.6.5 or newer"; exit 1; }
+  fi
   mkdir -p /opt/reposilite "$var_data_dir" /var/log/reposilite
   URL="https://maven.reposilite.com/releases/com/reposilite/reposilite/${RELEASE}/reposilite-${RELEASE}-all.jar"
   download_file "$URL" /opt/reposilite/reposilite.jar
@@ -84,6 +89,7 @@ EOF
   cat >/etc/init.d/reposilite <<'EOF'
 #!/sbin/openrc-run
 description="Reposilite Maven repository manager"
+[ ! -f /etc/reposilite/database.env ] || . /etc/reposilite/database.env
 command="/usr/bin/java"
 command_args="${java_opts} -jar /opt/reposilite/reposilite.jar --working-directory=${data_directory:-/var/lib/reposilite} --local-configuration=/etc/reposilite/configuration.cdn --hostname=0.0.0.0 --port=${http_port:-8080}"
 if [ -n "${bootstrap_secret}" ]; then

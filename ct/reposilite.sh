@@ -143,7 +143,7 @@ if [[ "${METHOD:-}" == advanced ]] && MODE=advanced prompt_confirm "Customize Re
     IFS='|' read -r _key _label _default <<<"$_setting"
     [[ -n "${!_key:-}" ]] || printf -v "$_key" '%s' "$(MODE=advanced prompt_input "$_label" "$_default" 60)"
   done
-  if [[ -z "${var_integrations_json:-}${var_integrations_file:-}" ]] && MODE=advanced prompt_confirm "Configure database, external storage, LDAP and native TLS?" "n" 60; then
+  if [[ -z "${var_integrations_file:-}" && ( -z "${var_integrations_json:-}" || "$var_integrations_json" == '{}' ) ]] && MODE=advanced prompt_confirm "Configure database, external storage, LDAP and native TLS?" "n" 60; then
     _integrations_interactive=yes
   fi
 fi
@@ -193,6 +193,10 @@ _container_ram="${RAM_SIZE:-${var_ram:-1024}}"
 [[ "$var_repository_quota" =~ ^[1-9][0-9]{0,2}$ && "$var_repository_quota" -le 100 ]] || { msg_error "Repository quota must be 1-100 percent"; exit 1; }
 [[ "$var_redeployment" =~ ^(yes|no)$ && "$var_preserve_snapshots" =~ ^(yes|no)$ ]] || { msg_error "Repository switches must be yes or no"; exit 1; }
 ensure_dependencies jq
+if [[ "$(jq -r '.ldap.enabled // false' <<<"$var_integrations_json")" == true && "$var_admin_user" == admin ]]; then
+  var_admin_user="$(python3 -c 'import secrets; print("local-manager-" + secrets.token_hex(6))')"
+  msg_info "LDAP enabled; reserved local manager token: $var_admin_user"
+fi
 if [[ -n "$var_repositories_json" ]]; then
   jq -e 'type == "array" and length > 0 and all(.[];
     type == "object" and (.id | type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")) and

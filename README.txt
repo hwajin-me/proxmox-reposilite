@@ -24,17 +24,17 @@ Access and first login
     pct exec <CTID> -- cat /etc/conf.d/reposilite
 
   The service starts without a token secret in its process arguments after
-  installation. Tokens are stored as hashes in SQLite. The config retains the
+  installation. Tokens are stored as hashes in the configured SQL database. The config retains the
   initial plaintext secret for first login; keep it private. If you rotate the
   token in the dashboard, update your saved credentials accordingly.
-  Use HTTPS through your reverse proxy when accessing from untrusted networks.
+  Native HTTPS is available in the integration profile; no reverse proxy is installed.
   Older installations retain their existing bootstrap-token setup on update.
 
 Updates and data
 
   Run update inside the container. Core re-runs the CT script, checks upstream
   GitHub releases, downloads the Maven-hosted JAR and verifies its SHA256.
-  Application binaries live in /opt/reposilite. Configuration, SQLite and Maven
+  Application binaries live in /opt/reposilite. Local data, default SQLite and Maven
   artifacts live in var_data_dir (default /var/lib/reposilite) and remain in place during updates.
   Services and tokens use /etc/conf.d/reposilite. Console logs are in
   /var/log/reposilite; Reposilite also writes logs in its working directory.
@@ -92,6 +92,8 @@ Application settings
   var_dashboard_title         Reposilite Repository
   var_dashboard_description   Public Maven repository hosted through Reposilite
   var_repositories_json       unset (optional advanced override)
+  var_integrations_json       {} (native connection/TLS profile)
+  var_integrations_file       unset (mode-600 profile on Proxmox host)
 
   Repository names are comma separated; surrounding whitespace is ignored. Use - for an empty
   public/private list. IDs must be unique across both lists. The quota is the
@@ -118,13 +120,119 @@ Application settings
   by update. Changing the original var_* inputs later does not reconfigure an
   existing installation; use the dashboard or edit /etc/conf.d/reposilite.
 
-  JSON metadata describes every supported app variable for catalog integration.
+Native DB, external storage, LDAP and TLS
+
+  Advanced Settings -> Customize Reposilite application settings -> Configure
+  database, external storage, LDAP and native TLS opens a guided TTY setup.
+  Passwords are entered with hidden input. Environment-supplied profiles skip
+  the guided setup. No reverse proxy or OIDC gateway is installed.
+
+  For unattended installation, copy examples/integrations.json, replace the
+  example endpoints/secrets and remove sections you do not need. Protect it:
+
+    chmod 600 /root/reposilite-profile.json
+    var_integrations_file=/root/reposilite-profile.json mode=generated bash -c "$(curl -fsSL https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main/ct/reposilite.sh)"
+
+  Add your Core storage/network choices as usual. File contents are validated
+  before container creation and transferred through the Core install environment.
+  Do not put secret JSON directly into shared commands, logs or source control.
+  Keep the source profile private or remove it after provisioning.
+
+  Database:
+    SQLite is the default. MariaDB, MySQL and PostgreSQL accept host, port,
+    name, user, password and an optional parameters object containing JDBC driver
+    options. MariaDB is supported upstream; MySQL/PostgreSQL are labelled
+    experimental by Reposilite. Create the database and database user first;
+    this installer does not provision an external SQL server or migrate data.
+    MariaDB uses its native ENV credential provider and a root-only
+    /etc/reposilite/database.env file, preserving spaces and special characters.
+    MySQL/PostgreSQL credentials are URL-encoded into the root-only native
+    configuration file. Database passwords are never Java command arguments. TLS options depend on the selected driver,
+    e.g. parameters={"sslMode":"verify-full"} for MariaDB or PostgreSQL's
+    {"sslmode":"verify-full"}. Supply trustedCertificates for private CAs.
+    External databases require independent, consistent backups before update.
+    Use a dedicated, empty database on first install: settings are seeded once.
+
+  Artifact storage:
+    Local filesystem remains the default. S3 profiles support AWS S3, MinIO,
+    R2 and other compatible endpoints, bucketName, region, accessKey, secretKey,
+    prefix, signer, pathStyle and skipBucketCreation. The profile always uses
+    sharedBucket=true to isolate repositories as <prefix>/<repository>/....
+    R2 needs region=auto and signer=LEGACY_V4. Typical MinIO uses pathStyle=true.
+    For an existing restricted bucket, use skipBucketCreation=true (default in
+    the guided setup). S3 credentials are stored in Reposilite's settings DB.
+    This mode requires Reposilite 3.6.5 or newer for shared-bucket isolation.
+    var_repositories_json overrides the profile storage and allows mixed fs/S3
+    repositories; give each S3 repository an isolated bucket/prefix or enable
+    sharedBucket. Global path-style/bucket-creation flags still come from the
+    profile. Moving existing artifacts between providers is manual.
+
+    For host-mounted NFS/SMB storage, use storage={"type":"fs","root":"/mnt/artifacts"}.
+    First mount it on Proxmox and bind it into the LXC at that exact path, with
+    writable ownership for the unprivileged container. The path must already be
+    a mount point before installer setup. The script checks it during installation
+    and at every service start, so a missing mount cannot silently fill the root
+    disk. It does not mount NFS/SMB inside the unprivileged LXC. Provision such a
+    bind mount through your host/container setup before running the application
+    installer; the normal fresh-container wizard does not create this bind mount.
+
+  LDAP / LDAPS (native Reposilite authentication):
+    Set ldap.enabled=true, hostname, ssl, port, baseDn, searchUserDn and
+    searchUserPassword. Optional typeAttribute (objectClass value, default person),
+    userAttribute (default uid), userFilter (additional LDAP filter, default empty)
+    and userType (TEMPORARY by default, or PERSISTENT) map directly to Reposilite's
+    authentication settings. Use a read-only search account. LDAPS is the guided
+    default (port 636); plain LDAP uses port 389. StartTLS is not supported by
+    Reposilite's current authenticator. An enterprise/private LDAP CA can be
+    supplied in trustedCertificates as PEM strings; guided setup reads CA files
+    from the Proxmox host and imports them into a private JVM truststore while
+    preserving system CAs. Certificate/hostname verification stays enabled.
+
+    LDAP users authenticate with their directory username/password and receive
+    mapped access tokens. They do not automatically receive manager or repository
+    write permissions: grant the needed token permissions in the dashboard.
+    The generated local manager remains available for recovery. If the default
+    manager name admin is used with LDAP, it becomes local-manager-<random>.
+    Custom manager/token names must be reserved and must never match directory
+    usernames: upstream LDAP reuses existing tokens by name, including their
+    permissions. There is no automatic LDAP group-to-permission mapping.
+    Upstream token
+    authentication can accept a previously issued persistent token independently
+    of LDAP; choose mapped token type deliberately and review token revocation.
+    OIDC has no native setting in the verified Reposilite release and is excluded.
+
+  Native TLS:
+    tls.mode is off (default), self-signed or provided; set hostname and optional
+    port (default 443). HTTP redirects to HTTPS when enabled. Self-signed mode
+    generates an RSA certificate with a matching DNS/IP SAN, valid for 365 days.
+    Trust that certificate on clients or replace it with a trusted certificate.
+    Provided mode accepts certificate (fullchain PEM) and privateKey (unencrypted
+    PEM) strings; the guided setup reads these from host files. The key pair,
+    DNS/IPv4 hostname and expiration are checked before application startup. Set DNS to
+    the container IP. The installer and updater verify HTTPS with the configured
+    certificate and local hostname resolution; they do not disable TLS checks.
+    Certificates/keys live under /etc/reposilite/tls with private permissions.
+    Renew externally, replace certificate.pem and private-key.pem, and restart
+    Reposilite. Automatic ACME issuance/renewal is not included.
+
+  The native config is /etc/reposilite/configuration.cdn (mode 600). Shared
+  repository and LDAP settings are seeded through the manager API into the
+  configured database. Temporary storage/LDAP JSON copies are removed after
+  setup. Updates preserve settings and certificates; they do not reapply profiles
+  or migrate an existing SQLite database to an external database. Profile-based
+  configuration is for new installs. Existing instances can use the dashboard
+  for LDAP/repositories and edit native config/service settings for DB/TLS.
+
+  JSON metadata describes application variables for catalog integration.
 
   ARM64 and Incus are not tested. Core asks before attempting unverified ARM64.
 
 Sources
   https://reposilite.com/guide/general
   https://reposilite.com/guide/tokens
+  https://reposilite.com/guide/ldap
+  https://reposilite.com/guide/s3
+  https://reposilite.com/guide/ssl
   https://github.com/dzikoysk/reposilite
   https://community-scripts.org/docs
 

@@ -32,10 +32,23 @@ class IntegrationTests(unittest.TestCase):
         config = root / "etc/reposilite/configuration.cdn"
         jdbc = json.loads(config.read_text().split(": ", 1)[1])
         query = parse_qs(urlsplit(jdbc.removeprefix("jdbc:")).query)
-        self.assertEqual(query["password"], [DB["password"]])
         self.assertEqual(query["sslMode"], ["verify-full"])
+        self.assertEqual(query["credentialType"], ["ENV"])
+        self.assertNotIn("password", query)
+        credentials = root / "etc/reposilite/database.env"
+        result = subprocess.run(["bash", "-c", 'source "$1"; printf "%s" "$MARIADB_PWD"', "test", str(credentials)], capture_output=True, text=True)
+        self.assertEqual(result.stdout, DB["password"])
+        self.assertEqual(credentials.stat().st_mode & 0o777, 0o600)
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(DB["password"], (root / "etc/reposilite/runtime.conf").read_text())
+
+    def test_other_jdbc_drivers_encode_credentials(self):
+        for dialect in ("mysql", "postgresql"):
+            root = self.root()
+            CONFIG.render({"database": {**DB, "type": dialect}}, root)
+            jdbc = json.loads((root / "etc/reposilite/configuration.cdn").read_text().split(": ", 1)[1])
+            query = parse_qs(urlsplit(jdbc.removeprefix("jdbc:")).query)
+            self.assertEqual(query["password"], [DB["password"]])
 
     def test_ldap_and_s3_use_native_field_names_and_isolate_repositories(self):
         root = self.root()

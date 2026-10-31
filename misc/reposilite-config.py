@@ -10,7 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 
 def require(condition, message):
@@ -66,7 +66,10 @@ def validate(profile):
         text(db.get("password"), "database password")
         parameters = db.get("parameters", {})
         require(isinstance(parameters, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in parameters.items()), "Database parameters must contain strings")
-        require(not {k.lower() for k in parameters} & {"user", "username", "password"}, "Set database credentials in user/password")
+        require(not {k.lower() for k in parameters} & {"user", "username", "password", "credentialtype", "userkey", "pwdkey"}, "Set database credentials in user/password")
+        require(all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", k) and not any(ord(c) < 32 for c in v) for k, v in parameters.items()), "Invalid database parameter")
+        if dialect == "mariadb":
+            require(all("&" not in v for v in parameters.values()), "MariaDB parameter values cannot contain ampersands")
     else:
         require(not set(db) - {"type"}, "SQLite profile accepts only type; database is reposilite.db")
 
@@ -139,8 +142,19 @@ def render(profile, root):
     dialect = db.get("type", "sqlite")
     database = "sqlite reposilite.db"
     if dialect != "sqlite":
-        parameters = {**db.get("parameters", {}), "user": db["user"], "password": db["password"]}
-        database = f"jdbc:{dialect}://{db['host']}:{db.get('port', 5432 if dialect == 'postgresql' else 3306)}/{db['name']}?{urlencode(parameters)}"
+        if dialect == "mariadb":
+            # MariaDB Connector/J does not URL-decode query parameters. Its
+            # built-in ENV credential provider preserves arbitrary passwords.
+            parameters = {**db.get("parameters", {}), "credentialType": "ENV"}
+            query = "&".join(k + "=" + v for k, v in parameters.items())
+            write(etc / "database.env", "export MARIADB_USER=" + shlex.quote(db["user"]) + "\nexport MARIADB_PWD=" + shlex.quote(db["password"]) + "\n")
+        else:
+            parameters = {**db.get("parameters", {}), "user": db["user"], "password": db["password"]}
+            query = urlencode(parameters, quote_via=quote)
+            write(etc / "database.env", "")
+        database = f"jdbc:{dialect}://{db['host']}:{db.get('port', 5432 if dialect == 'postgresql' else 3306)}/{db['name']}?{query}"
+    else:
+        write(etc / "database.env", "")
     tls = profile.get("tls", {})
     tls_on = tls.get("mode", "off") != "off"
     config = f"database: {json.dumps(database)}\n"
@@ -217,11 +231,11 @@ def render(profile, root):
 
 def interactive(profile):
     """Use the controlling TTY so stdout contains only JSON, never credentials."""
-    with open("/dev/tty", "r+") as tty:
+    with open("/dev/tty", "r") as tty_input, open("/dev/tty", "w") as tty:
         def ask(label, default="", secret=False):
             tty.write(label + (f" [{default}]" if default and not secret else "") + ": ")
             tty.flush()
-            return (getpass.getpass("", stream=tty) if secret else tty.readline().strip()) or default
+            return (getpass.getpass("", stream=tty) if secret else tty_input.readline().strip()) or default
         dialect = ask("Database: sqlite / mariadb / mysql / postgresql", "sqlite")
         db = {"type": dialect}
         if dialect != "sqlite":

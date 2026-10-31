@@ -24,8 +24,8 @@ Not tested:
 - ARM64 and Incus.
 - A deliberately broken release and rollback recovery.
 
-Public and DevScripts copies differ only in _CS_DEFAULT_URL so each resolves
-its own matching installer and generated update entrypoint.
+The public standalone distribution has continued independently. The historical
+DevScripts copy is not maintained or submitted as part of these improvements.
 
 Customization validation (2026-10-31):
 - Fresh renamed reposilite install with port 9091, /srv data directory, 128 MiB
@@ -62,3 +62,42 @@ Standalone improvements validation (2026-10-31):
   claim of real cross-version database migration/rollback validation.
 - Existing upstream PR was already closed; standalone changes do not create,
   reopen, update or push an upstream contribution branch.
+
+Native integrations validation (2026-10-31):
+- 28 automated tests passed, including native profile validation, private profile
+  permissions, LDAP manager-name isolation, S3 overrides, secret escaping, missing
+  external mount rejection, TLS PEM key/hostname validation and HTTPS update
+  health checks. CI runs the same suite on main pushes.
+- Guided setup exercised in a real controlling terminal, including LDAPS/TLS
+  choices and password entry with no terminal echo.
+- Disposable Alpine 3.24.3 amd64 Docker environment, Java 21.0.12, Reposilite
+  3.6.5. Used the production installer setup function and native OpenRC service
+  command definitions. Core OS helpers and OpenRC process launching were replaced
+  by a small Docker harness; this is not a new end-to-end Proxmox/OpenRC claim.
+- Real external MariaDB 11.8.9 fixture connected successfully with a password
+  containing a space, ampersand, plus sign, dollar sign and question mark.
+  MariaDB native ENV credential provider used; password absent from Java argv.
+- Real OpenLDAP 2.6.15 fixture over LDAPS with a private CA imported into the JVM
+  truststore: correct directory password accepted, wrong password rejected.
+  LDAP mapped token was TEMPORARY, had no manager permission and could not deploy.
+- Native Reposilite HTTPS with generated RSA/SAN certificate; curl verification
+  enabled using certificate trust and local hostname resolution. HTTP redirects
+  to HTTPS. Existing PEM/key imported through provided mode and server restarted.
+- S3 API tested against Moto 5.2.5 emulator: public artifact upload/download,
+  private unauthenticated rejection, and separate object keys confirmed for
+  releases/snapshots/private within one shared bucket and validation prefix.
+- Forced same-version deployment through the production update function with
+  actual Maven download/SHA256, real flock and Core backup/restore helpers.
+  Native configuration, credentials file, service config and certificate hashes
+  stayed identical. LDAPS login and existing S3 artifacts remained accessible.
+  Backups contained certificates/credentials under a mode-0700 parent; update
+  lock was released. This does not test a cross-version DB migration.
+- Proxmox fresh integration validation was interrupted when host SSH/network
+  connectivity became unavailable. The initial temporary LXC used an older
+  cached installer; its result is not counted as native integration validation.
+
+Additional limits:
+- Actual AWS S3/MinIO/R2, external filesystem bind mounts and MySQL/PostgreSQL
+  servers have not been exercised. S3 uses the verified native 3.6.5 field schema;
+  MySQL/PostgreSQL retain upstream's experimental status.
+- LDAP StartTLS, OIDC, reverse proxies and automatic ACME renewal are not included.

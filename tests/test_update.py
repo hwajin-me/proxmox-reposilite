@@ -23,7 +23,10 @@ curl_with_retry() {
 }
 sha256sum() { [[ "${FAULT:-}" != checksum ]]; }
 sleep() { :; }
-curl() { [[ $(cat "$FIXTURE/service") == running && "${FAULT:-}" != health ]]; }
+curl() {
+  printf '%s\n' "$*" >>"$FIXTURE/health-requests"
+  [[ $(cat "$FIXTURE/service") == running && "${FAULT:-}" != health ]]
+}
 rc-service() {
   echo "$2" >>"$FIXTURE/events"
   if [[ "$2" == stop ]]; then
@@ -43,7 +46,7 @@ create_backup() {
   mkdir -p "$BACKUP_DIR"
   for file in "$@"; do
     mkdir -p "$BACKUP_DIR/files$(dirname "$file")"
-    cp -p "$file" "$BACKUP_DIR/files$file"
+    cp -Rp "$file" "$BACKUP_DIR/files$file"
     printf '%s\n' "$file" >>"$BACKUP_DIR/manifest"
   done
 }
@@ -63,7 +66,7 @@ install() {
 
 
 class UpdateTests(unittest.TestCase):
-    def run_update(self, fault=""):
+    def run_update(self, fault="", tls=False):
         temporary = tempfile.TemporaryDirectory(prefix="reposilite-update-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -73,6 +76,11 @@ class UpdateTests(unittest.TestCase):
         (root / "etc/init.d/reposilite").write_text("service")
         (root / "root/.reposilite").write_text("3.6.4\n")
         (root / "etc/conf.d/reposilite").write_text(f'data_directory="{root}/data"\nhttp_port=9093\n')
+        if tls:
+            (root / "etc/reposilite/tls").mkdir(parents=True)
+            (root / "etc/reposilite/tls/private-key.pem").write_text("private-key-fixture")
+            with (root / "etc/conf.d/reposilite").open("a") as config:
+                config.write('tls_enabled=yes\ntls_host=repo.example.test\ntls_port=8443\n')
         (root / "data/reposilite.db").write_text("original-db")
         (root / "data/configuration.cdn").write_text("original-config")
         (root / "service").write_text("running")
@@ -131,6 +139,17 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((root / "service").read_text().strip(), "stopped")
         self.assertEqual((root / "opt/reposilite/reposilite.jar").read_text(), "old-jar")
         self.assertFalse((root / "opt/reposilite/reposilite.jar.new").exists())
+
+    def test_native_tls_health_checks_and_certificate_backup(self):
+        root, result = self.run_update(tls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        health = (root / "health-requests").read_text()
+        self.assertIn("https://repo.example.test:8443/", health)
+        self.assertIn("--resolve repo.example.test:8443:127.0.0.1", health)
+        self.assertIn("--cacert", health)
+        self.assertNotIn("--insecure", health)
+        saved = list((root / "opt/reposilite-backups").glob("*/state/files/**/private-key.pem"))
+        self.assertEqual(saved[0].read_text(), "private-key-fixture")
 
 
 if __name__ == "__main__":
