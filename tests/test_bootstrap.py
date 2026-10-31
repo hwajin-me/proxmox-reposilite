@@ -6,11 +6,14 @@ import tempfile
 import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1] / "install/reposilite-install.sh").read_text()
-SEED = SOURCE.split("  # Seed editable settings once", 1)[1].split('  msg_ok "Configured Reposilite"', 1)[0]
+SEED = SOURCE.split("  # Seed editable settings once", 1)[1].split("\n}\n", 1)[0]
+CLEANUP = "cleanup_reposilite_install_files() {" + SOURCE.split("cleanup_reposilite_install_files() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 SEED = SEED.split("\n", 1)[1]
 STUBS = r'''
 CURL_LOCAL=(--noproxy '*' --connect-timeout 5 --max-time 30)
 msg_error() { echo "$*" >&2; }
+msg_info() { :; }
+msg_ok() { :; }
 sleep() { :; }
 sed() {
   if [[ $(uname -s) == Darwin && "$1" == -i ]]; then
@@ -66,10 +69,14 @@ class BootstrapTests(unittest.TestCase):
         for name in ["bootstrap-auth", "admin-auth", "create-manager"]:
             (private / name).write_text("sensitive fixture")
         (root / "calls").write_text("0")
+        (root / "application").mkdir()
+        (root / "application/reposilite.jar.sha256").write_text("verified checksum")
+        (root / "configure.py").write_text("installer helper")
+        (root / "runtime.conf").write_text("installer variables")
         (root / "storage.json").write_text('{"provider":{"type":"fs","mount":"","quota":"100%"},"root":""}')
         (root / "ldap.json").write_text('{}')
         (root / "config").write_text('bootstrap_secret="temporary"\nadmin_secret="persistent"\n')
-        seed = SEED.replace("/etc/conf.d/reposilite", str(root / "config")).replace("/etc/reposilite", str(root))
+        seed = (CLEANUP + "\n" + SEED).replace("/etc/conf.d/reposilite", str(root / "config")).replace("/etc/reposilite", str(root)).replace("/opt/reposilite", str(root / "application"))
         result = subprocess.run(["bash", "-c", STUBS + "\n" + seed], capture_output=True, text=True, env={
             **os.environ, "FAULT": fault, "FIXTURE": str(root), "STD": "",
             "BOOTSTRAP_DIR": str(private), "AUTH_FILE": str(private / "bootstrap-auth"),
@@ -77,6 +84,8 @@ class BootstrapTests(unittest.TestCase):
             "var_repository_quota": "75", "var_redeployment": "no", "var_preserve_snapshots": "no",
             "var_repositories_json": "", "var_dashboard_title": "Team Maven", "var_dashboard_description": "Team",
         })
+        for leftover in ("configure.py", "runtime.conf", "application/reposilite.jar.sha256"):
+            self.assertEqual((root / leftover).exists(), result.returncode != 0)
         self.assertNotIn("sensitive fixture", result.stdout + result.stderr)
         if (root / "requests").exists():
             self.assertNotIn("sensitive fixture", (root / "requests").read_text())

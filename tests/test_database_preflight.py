@@ -16,7 +16,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "misc/DatabasePreflight.java"
 INSTALLER = (SOURCE.parents[1] / "install/reposilite-install.sh").read_text()
 PREFLIGHT = '  if [[ "$database_type" != sqlite ]]; then' + INSTALLER.split(
     '  if [[ "$database_type" != sqlite ]]; then', 1
-)[1].split('  msg_info "Configuring Reposilite"', 1)[0]
+)[1].split("  # The source-launch JDBC preflight", 1)[0]
 JAR = os.environ.get("REPOSILITE_TEST_JAR")
 if JAR:
     JAR = str(Path(JAR).resolve())

@@ -77,6 +77,22 @@ Updates and data
   private. Updates also repair permissions on the default SQLite database and
   its sidecars. A custom filesystem mount needs equivalent access controls.
 
+Post-install disk cleanup
+
+  A successful new installation removes the downloaded checksum, configuration
+  renderer, intermediate runtime variables and database/seeding input files.
+  Core cleanup_lxc also clears APK/package caches at the end of installation.
+  After the external SQL preflight finishes, Java 21 is reduced from the full
+  JDK to an explicitly retained headless JRE before the service first starts.
+  A disposable Alpine/amd64 fixture saved about 104 MiB under /usr; the exact
+  saving depends on package versions and existing dependencies.
+
+  The application JAR, native configuration, credentials, database/artifacts,
+  TLS/CA files, truststore, update guard, logs and recovery backups remain.
+  Python/OpenSSL and Core tools stay available for maintenance and updates.
+  The JDK reduction applies to new installations; application updates do not
+  remove packages from an existing installation. See TESTING.txt for evidence.
+
 Community Scripts Core compatibility
 
   This standalone distribution uses the Community Scripts Core lifecycle and

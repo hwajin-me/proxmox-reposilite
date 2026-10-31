@@ -248,3 +248,28 @@ Proxmox pct selection, full-LXC backup/restore, cron execution, OS reboot and
 current end-to-end installation remain pending on a reachable host. Upstream
 update-apps dry-run can start stopped containers and repair legacy entrypoints;
 it must not be used as a read-only host probe. See AUTO-UPDATES.txt.
+
+Post-install cleanup validation (2026-10-31):
+- Complete local suite: 93 methods, 91 passed and two unchanged Linux-only
+  ownership/locking checks skipped on macOS; CI runs those separately as root.
+  The actual verified JAR/Java 21 and pinned official updater fixtures were
+  supplied. All five tracked shell files passed syntax/ShellCheck/shfmt.
+- New installations use Core setup_java with a full JDK for source-launch JDBC
+  preflight, explicitly retain openjdk21-jre-headless, then remove openjdk21-jdk
+  before the first application start. Python/OpenSSL/Core tools remain.
+- Exact installer-owned intermediate paths are removed after successful manager
+  and repository verification. Tests confirm idempotence, symlink-target safety,
+  failure-path preservation and unchanged runtime/data/TLS/recovery sentinels.
+  Package-manager failure injection verifies that a failed runtime install never
+  reaches JDK removal and that removal failures propagate.
+- Real Alpine 3.24 amd64 package fixture: /usr measured 315316 KiB before and
+  208784 KiB after the JDK-to-headless-JRE reduction, saving 106532 KiB (about
+  104 MiB). This is a /usr measurement, not a full LXC root-disk size claim.
+- The actual Reposilite 3.6.5 JAR started on both runtimes with the same SQLite
+  data/native HTTPS configuration. Certificate verification with --cacert and
+  --resolve returned 200 before and after. java/keytool, system cacerts and the
+  private truststore's imported custom alias remained; javac was removed.
+  The disposable Docker fixture was removed. This is runtime/package evidence,
+  not a new full Proxmox install or cross-version migration test.
+- Existing installations are not subjected to automatic package removal by the
+  application updater. APK caches still use the standard Core cleanup lifecycle.

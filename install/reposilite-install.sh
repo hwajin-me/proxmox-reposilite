@@ -12,6 +12,15 @@ setting_up_container
 network_check
 update_os
 
+# Only installer-owned intermediates belong here. Native configuration, CA/TLS
+# files, credentials, application data and recovery backups remain in place.
+cleanup_reposilite_install_files() {
+  rm -f -- /opt/reposilite/reposilite.jar.sha256 \
+    /etc/reposilite/configure.py /etc/reposilite/runtime.conf \
+    /etc/reposilite/database-check.json /etc/reposilite/DatabasePreflight.java \
+    /etc/reposilite/storage.json /etc/reposilite/ldap.json
+}
+
 setup_alpine() {
   set +x
   umask 077
@@ -82,6 +91,13 @@ EOF
     rm -f /etc/reposilite/database-check.json /etc/reposilite/DatabasePreflight.java
     msg_ok "Verified empty Reposilite external database"
   fi
+  # The source-launch JDBC preflight needs the JDK only during installation.
+  # Keep the runtime explicitly before apk removes the compiler/GUI dependencies.
+  msg_info "Keeping the headless Java runtime"
+  $STD apk add --no-cache openjdk21-jre-headless
+  $STD apk del openjdk21-jdk
+  msg_ok "Kept headless Java runtime"
+
   msg_info "Configuring Reposilite"
   API_BASE="http://127.0.0.1:${var_port}"
   CURL_LOCAL=(--noproxy '*' --connect-timeout 5 --max-time 30)
@@ -261,6 +277,9 @@ EOF
     exit 1
   fi
   msg_ok "Configured Reposilite"
+  msg_info "Removing Reposilite installation files"
+  cleanup_reposilite_install_files
+  msg_ok "Removed Reposilite installation files"
 }
 
 run_os_setup

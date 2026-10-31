@@ -18,7 +18,9 @@ PASS  CT defaults and exported app_vars agree with json/reposilite.json.
 PASS  Core prepared FUNCTIONS_FILE_PATH reaches the Alpine installer.
 PASS  setup_alpine/run_os_setup and update_alpine/run_os_update cover the one
       supported OS family. OpenRC is used; no systemctl or containerized app.
-PASS  JAVA_VERSION=21 setup_java supplies a full JDK; native config uses only
+PASS  JAVA_VERSION=21 setup_java supplies the temporary full JDK for JDBC
+      preflight. The installer then explicitly retains openjdk21-jre-headless
+      before removing the JDK/compiler/GUI dependencies. Native config uses only
       Python's standard library, without pip/venv/application Python runtimes.
 PASS  start() loads tools.func on update, then the general Forge release helper.
       The updater now distinguishes no-update 1 from errors such as 6/22/250.
