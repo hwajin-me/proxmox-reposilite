@@ -13,9 +13,13 @@ import sys
 from urllib.parse import quote, urlencode, urlsplit
 
 
+class ProfileError(ValueError):
+    pass
+
+
 def require(condition, message):
     if not condition:
-        raise ValueError(message)
+        raise ProfileError(message)
 
 
 def obj(value, fields, label):
@@ -46,6 +50,79 @@ def url(value):
     require(parsed.scheme in ("http", "https") and parsed.hostname and
             not parsed.username and not parsed.password and not parsed.query and
             not parsed.fragment and parsed.path in ("", "/"), "Invalid S3 endpoint")
+    if parsed.port is not None:
+        port(parsed.port, "S3 endpoint port")
+
+
+def ldap_filter(value):
+    text(value, "LDAP filter", empty=True)
+    if not value:
+        return
+    depth = 0
+    index = 0
+    for i, character in enumerate(value):
+        if i < index:
+            continue
+        if character == "\\":
+            require(bool(re.fullmatch(r"[0-9a-fA-F]{2}", value[i + 1:i + 3])), "LDAP filter escapes require two hexadecimal digits")
+            index = i + 3
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            require(depth >= 0 and (depth != 0 or i == len(value) - 1), "LDAP filter must contain one balanced filter")
+    require(value.startswith("(") and value.endswith(")") and depth == 0, "LDAP filter must contain one balanced filter")
+
+
+def validate_repositories(repositories):
+    require(isinstance(repositories, list) and repositories, "Repository JSON must be a nonempty array")
+    ids = set()
+    locations = []
+    for repository in repositories:
+        require(isinstance(repository, dict), "Invalid repository definition")
+        name = repository.get("id")
+        require(isinstance(name, str) and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name)) and name not in ids, "Repository IDs must be valid and unique")
+        ids.add(name)
+        require(repository.get("visibility") in ("PUBLIC", "PRIVATE"), "Invalid repository visibility")
+        for flag in ("redeployment", "preserveSnapshots"):
+            require(flag not in repository or type(repository[flag]) is bool, "Repository switches must be boolean")
+        require(isinstance(repository.get("proxied", []), list), "Repository proxy definitions must be an array")
+        provider = repository.get("storageProvider")
+        require(isinstance(provider, dict), "Missing repository storage provider")
+        if provider.get("type") == "fs":
+            quota = provider.get("quota")
+            require(isinstance(quota, str) and bool(re.fullmatch(r"(?:[1-9][0-9]?%|100%|[1-9][0-9]*(?:B|KB|MB|GB|TB))", quota)), "Invalid filesystem quota: use 1-100% or a size such as 500MB")
+            text(provider.get("mount", ""), "Filesystem mount", empty=True)
+        elif provider.get("type") == "s3":
+            settings = {key: provider[key] for key in ("endpoint", "bucketName", "region", "accessKey", "secretKey", "prefix", "signer") if key in provider}
+            validate({"storage": {"type": "s3", **settings}})
+            require(type(provider.get("sharedBucket", False)) is bool, "S3 sharedBucket must be boolean")
+            prefix = provider.get("prefix", "").strip().strip("/")
+            if provider.get("sharedBucket", False):
+                prefix = "/".join(part for part in (prefix, name) if part)
+            namespace = prefix + "/" if prefix else ""
+            location = (provider.get("endpoint", "").rstrip("/").lower(), provider["bucketName"], namespace)
+            for previous in locations:
+                require(location[:2] != previous[:2] or not (location[2].startswith(previous[2]) or previous[2].startswith(location[2])), "S3 repositories must not overlap in a shared bucket")
+            locations.append(location)
+        else:
+            require(False, "Repository storage must be fs or s3")
+
+
+def shell_config(data):
+    fields = data.split("\0")
+    require(fields[-1] == "" and len(fields) % 2 == 1, "Invalid shell configuration payload")
+    require(all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in fields[:-1:2]), "Invalid shell configuration key")
+    return "".join(f"{key}={shlex.quote(value)}\n" for key, value in zip(fields[:-1:2], fields[1:-1:2]))
+
+
+def database_parameters(profile):
+    db = profile.get("database", {})
+    parameters = dict(db.get("parameters", {}))
+    if db.get("type") == "postgresql" and profile.get("trustedCertificates"):
+        if not any(key.lower() in ("sslfactory", "sslrootcert") for key in parameters):
+            parameters["sslfactory"] = "org.postgresql.ssl.DefaultJavaSSLFactory"
+    return parameters
 
 
 def pem(value, kind):
@@ -80,19 +157,21 @@ def validate(profile):
         require(not storage.get("root"), "S3 does not use a filesystem root")
         text(storage.get("bucketName"), "S3 bucket")
         require(bool(re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", storage["bucketName"])), "Invalid S3 bucket name")
+        text(storage.get("endpoint", ""), "S3 endpoint", empty=True)
         if storage.get("endpoint"):
             url(storage["endpoint"])
         for key in ("region", "accessKey", "secretKey"):
             text(storage.get(key), f"S3 {key}")
         prefix = text(storage.get("prefix", "reposilite"), "S3 prefix", empty=True)
-        require(all(p not in (".", "..") for p in prefix.split("/")), "Invalid S3 prefix")
+        require(all(p not in (".", "..") for p in prefix.strip().strip("/").split("/")), "Invalid S3 prefix")
         require(storage.get("signer", "DEFAULT") in ("DEFAULT", "LEGACY_V4"), "Invalid S3 signer")
         for key in ("pathStyle", "skipBucketCreation"):
             require(type(storage.get(key, False)) is bool, f"{key} must be boolean")
-    elif storage.get("root"):
+    elif "root" in storage:
+        text(storage["root"], "Filesystem root", empty=True)
         root = storage["root"]
-        require(isinstance(root, str) and bool(re.fullmatch(r"/(srv|mnt)/[A-Za-z0-9_/-]+", root)) and
-                "//" not in root, "Storage root must be below /srv or /mnt")
+        require(not root or (bool(re.fullmatch(r"/(srv|mnt)/[A-Za-z0-9_/-]+", root)) and
+                "//" not in root), "Storage root must be below /srv or /mnt")
     if kind == "fs":
         require(not set(storage) - {"type", "root"}, "Filesystem storage accepts type/root only")
 
@@ -106,12 +185,16 @@ def validate(profile):
             text(ldap.get(key), f"LDAP {key}")
         for key, default in (("typeAttribute", "person"), ("userAttribute", "uid")):
             require(bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9;-]*", text(ldap.get(key, default), key))), "Invalid LDAP attribute")
-        text(ldap.get("userFilter", ""), "LDAP filter", empty=True)
+        ldap_filter(ldap.get("userFilter", ""))
         require(ldap.get("userType", "TEMPORARY") in ("TEMPORARY", "PERSISTENT"), "Invalid LDAP userType")
 
     tls = obj(profile.get("tls", {}), ("mode", "hostname", "port", "certificate", "privateKey"), "TLS")
     mode = tls.get("mode", "off")
     require(mode in ("off", "self-signed", "provided"), "TLS mode must be off, self-signed or provided")
+    if "hostname" in tls:
+        host(tls["hostname"])
+    if "port" in tls:
+        port(tls["port"], "TLS port")
     if mode != "off":
         host(tls.get("hostname"))
         port(tls.get("port", 443), "TLS port")
@@ -145,14 +228,16 @@ def render(profile, root):
         if dialect == "mariadb":
             # MariaDB Connector/J does not URL-decode query parameters. Its
             # built-in ENV credential provider preserves arbitrary passwords.
-            parameters = {**db.get("parameters", {}), "credentialType": "ENV"}
+            parameters = {**database_parameters(profile), "credentialType": "ENV"}
             query = "&".join(k + "=" + v for k, v in parameters.items())
             write(etc / "database.env", "export MARIADB_USER=" + shlex.quote(db["user"]) + "\nexport MARIADB_PWD=" + shlex.quote(db["password"]) + "\n")
         else:
-            parameters = {**db.get("parameters", {}), "user": db["user"], "password": db["password"]}
+            parameters = {**database_parameters(profile), "user": db["user"], "password": db["password"]}
             query = urlencode(parameters, quote_via=quote)
             write(etc / "database.env", "")
         database = f"jdbc:{dialect}://{db['host']}:{db.get('port', 5432 if dialect == 'postgresql' else 3306)}/{db['name']}?{query}"
+        drivers = {"mariadb": "org.mariadb.jdbc.Driver", "mysql": "com.mysql.cj.jdbc.Driver", "postgresql": "org.postgresql.Driver"}
+        write(etc / "database-check.json", json.dumps({"url": database, "driver": drivers[dialect]}))
     else:
         write(etc / "database.env", "")
     tls = profile.get("tls", {})
@@ -184,8 +269,8 @@ def render(profile, root):
             check = "-checkip"
         except ValueError:
             check = "-checkhost"
-        match = subprocess.check_output(["openssl", "x509", "-in", str(certificate), "-noout", check, tls["hostname"]], stderr=subprocess.DEVNULL)
-        require(b"does match certificate" in match, "TLS certificate does not match hostname")
+        match = subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", check, tls["hostname"]], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        require(match.returncode == 0 and b"does match certificate" in match.stdout, "TLS certificate does not match hostname")
         subprocess.run(["openssl", "x509", "-in", str(certificate), "-noout", "-checkend", "0"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         config += f'sslEnabled: true\nsslPort: {tls.get("port", 443)}\nkeyPath: /etc/reposilite/tls/certificate.pem /etc/reposilite/tls/private-key.pem\nenforceSsl: true\n'
     write(etc / "configuration.cdn", config)
@@ -206,6 +291,9 @@ def render(profile, root):
     if ldap.get("enabled"):
         ldap = {"ssl": True, "typeAttribute": "person", "userAttribute": "uid", "userFilter": "", "userType": "TEMPORARY", **ldap}
         ldap.setdefault("port", 636 if ldap["ssl"] else 389)
+        manager = os.environ.get("var_admin_user", "admin")
+        require(bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", manager)), "Invalid local manager name")
+        ldap["userFilter"] = f"(&{ldap['userFilter']}(!({ldap['userAttribute']}={manager})))"
     write(etc / "ldap.json", json.dumps(ldap))
     opts = []
     if storage.get("type") == "s3":
@@ -230,7 +318,7 @@ def render(profile, root):
 
 
 def interactive(profile):
-    """Use the controlling TTY so stdout contains only JSON, never credentials."""
+    """Read prompts from the TTY; stdout is the private JSON transport."""
     with open("/dev/tty", "r") as tty_input, open("/dev/tty", "w") as tty:
         def ask(label, default="", secret=False):
             tty.write(label + (f" [{default}]" if default and not secret else "") + ": ")
@@ -273,11 +361,14 @@ def interactive(profile):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("validate", "interactive", "render"))
+    parser.add_argument("action", choices=("validate", "interactive", "render", "shell-config"))
     parser.add_argument("--file")
     parser.add_argument("--root", default="/")
     args = parser.parse_args()
     try:
+        if args.action == "shell-config":
+            print(shell_config(sys.stdin.read()), end="")
+            return 0
         if args.file:
             path = Path(args.file)
             require(path.stat().st_mode & 0o077 == 0, "Profile file must have mode 600 or stricter")
@@ -287,13 +378,16 @@ def main():
         if args.action == "interactive":
             profile = interactive(profile)
         validate(profile)
+        repositories = os.environ.get("var_repositories_json", "")
+        if repositories:
+            validate_repositories(json.loads(repositories))
         if args.action == "render":
             render(profile, Path(args.root))
         else:
             print(json.dumps(profile, separators=(",", ":")))
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         # Do not echo supplied values or subprocess output containing secrets.
-        print("Invalid integration profile: " + (str(error) if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError) else "file, certificate or configuration operation failed"), file=sys.stderr)
+        print("Reposilite profile error: " + (str(error) if isinstance(error, ProfileError) else "file, certificate or configuration operation failed"), file=sys.stderr)
         return 1
     return 0
 

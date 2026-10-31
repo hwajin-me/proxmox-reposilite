@@ -12,6 +12,7 @@ SETTINGS = CT.split("\nstart\n", 1)[1].split("\nbuild_container\n", 1)[0]
 HARNESS = """
 msg_error() { echo "$*" >&2; }
 msg_info() { echo "$*" >&2; }
+msg_warn() { echo "$*" >&2; }
 ensure_dependencies() { command -v jq >/dev/null; }
 prompt_confirm() { [[ "$1" == "Customize Reposilite application settings?" ]]; }
 prompt_input() { printf '%s' "${2}"; }
@@ -144,6 +145,33 @@ class SettingsTests(unittest.TestCase):
         repository["storageProvider"]["sharedBucket"] = "yes"
         result, _ = self.run_settings(var_repositories_json=json.dumps([repository]))
         self.assertNotEqual(result.returncode, 0)
+
+    def test_unsupported_os_and_invalid_provider_fail_before_creation(self):
+        result, _ = self.run_settings(var_os="debian")
+        self.assertNotEqual(result.returncode, 0)
+        for quota in ("bogus", "0%", "101%", "-2GB"):
+            repository = {"id": "broken", "visibility": "PUBLIC", "storageProvider": {"type": "fs", "quota": quota}}
+            result, _ = self.run_settings(var_repositories_json=json.dumps([repository]))
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_s3_namespaces_cannot_overlap(self):
+        provider = {"type": "s3", "bucketName": "maven-artifacts", "region": "auto", "accessKey": "fixture", "secretKey": "fixture"}
+        repositories = [{"id": name, "visibility": "PRIVATE", "storageProvider": dict(provider)} for name in ("first", "second")]
+        result, _ = self.run_settings(var_repositories_json=json.dumps(repositories))
+        self.assertNotEqual(result.returncode, 0)
+        repositories[0]["storageProvider"]["prefix"] = "shared"
+        repositories[1]["storageProvider"]["prefix"] = " /shared/ "
+        result, _ = self.run_settings(var_repositories_json=json.dumps(repositories))
+        self.assertNotEqual(result.returncode, 0)
+        for repository in repositories:
+            repository["storageProvider"]["sharedBucket"] = True
+        result, _ = self.run_settings(var_repositories_json=json.dumps(repositories))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_credential_fields_are_hidden_in_generator(self):
+        fields = {field["name"]: field for field in json.loads((ROOT / "json/reposilite.json").read_text())["app_vars"]}
+        self.assertTrue(fields["var_integrations_json"]["secret"])
+        self.assertTrue(fields["var_repositories_json"]["secret"])
 
 
 if __name__ == "__main__":

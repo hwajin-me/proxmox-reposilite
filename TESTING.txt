@@ -97,7 +97,70 @@ Native integrations validation (2026-10-31):
   cached installer; its result is not counted as native integration validation.
 
 Additional limits:
-- Actual AWS S3/MinIO/R2, external filesystem bind mounts and MySQL/PostgreSQL
-  servers have not been exercised. S3 uses the verified native 3.6.5 field schema;
+- Actual AWS S3/MinIO/R2, external filesystem bind mounts and full application
+  setup with MySQL/PostgreSQL have not been exercised. S3 uses the verified native 3.6.5 field schema;
   MySQL/PostgreSQL retain upstream's experimental status.
 - LDAP StartTLS, OIDC, reverse proxies and automatic ACME renewal are not included.
+
+Implementation and contribution audit (2026-10-31):
+- 44 automated tests passed locally, including four JDBC checks using the
+  publisher's checksum-verified Reposilite 3.6.5 JAR and a full Java 21 JDK.
+  The JDBC tests accept an empty SQLite database without creating tables,
+  reject an existing table without modifying its schema/data, and verify
+  sanitized connection/configuration failures. These are not external SQL tests.
+- Separate real MariaDB 11.8 fixture and Java 21 preflight checks passed with
+  the renderer's ENV credential provider and a password containing spaces,
+  ampersand, plus, dollar, question mark and quotes. An empty database was
+  accepted without table creation; an existing user table was refused with
+  its schema/data unchanged; invalid credentials were refused. Failures emitted
+  one generic error with no password or table name. The fixture was removed.
+- PostgreSQL 17.6 JDBC preflight passed separately with URL-encoded credentials:
+  empty database accepted without tables, existing table/data preserved on
+  refusal, and incorrect passwords refused. Installer redirection suppressed
+  all output while preserving success/failure status. The bundled JAR logger
+  occasionally reported a log-file collision during repeated source launches;
+  no connection secrets were present, and the installer also suppresses that
+  diagnostic. This tests JDBC preflight, not full PostgreSQL application/TLS
+  setup. The fixture was removed.
+- Added failure cases for missing active repositories, unreachable repository
+  storage, each repository listing probe, malformed/empty settings responses,
+  invalid saved manager credentials and rollback of the service init script.
+- Permission checks cover the private data/log directories, default SQLite
+  database and WAL/SHM/rollback-journal files, and the OpenRC umask.
+- Quoted/rotated credentials are passed to curl through stdin, never argv.
+  Tests run the updater under bash -x and check that secrets do not appear.
+- Input checks cover disabled-TLS injection fields, shell-safe configuration,
+  invalid LDAP filters, exclusion of custom local manager names, PostgreSQL
+  private-CA parameters, invalid filesystem quotas, overlapping S3 namespaces,
+  unsupported OS selection and secret metadata fields.
+- An installer preflight test injects simulated driver output on stdout/stderr:
+  it is suppressed for both success and failure, and the exit status is retained.
+  This keeps driver/bundled logger diagnostics out of Core's installation log.
+- Each tracked shell file is checked separately with bash -n, ShellCheck and
+  shfmt. CI also checks the commit diff for whitespace and runs the JDBC suite
+  with the verified official JAR on Linux/Java 21.
+- Current installer default-SQLite smoke test passed in disposable Alpine
+  3.24.3/amd64 with OpenJDK 21.0.13 and the verified Reposilite 3.6.5 JAR.
+  The production setup_alpine function completed, manager login succeeded after
+  restart, all three repository roots returned DIRECTORY, and SQLite quick_check
+  returned ok. Data directory 0700, database/service config 0600, removed
+  temporary authentication files and cleared bootstrap secret were verified.
+  Java argv contained no --token after setup. Core OS preparation and process
+  launch used a Docker/OpenRC harness; this is not a full Proxmox/OpenRC test.
+
+Reproduce the complete suite from this directory:
+
+  REPOSILITE_TEST_JAR=/absolute/path/reposilite-3.6.5-all.jar REPOSILITE_TEST_JAVA=/absolute/path/jdk-21/bin/java python3 -m unittest discover -s tests -v
+
+Without REPOSILITE_TEST_JAR the four optional JDBC checks are skipped. CI
+downloads the official fixture and verifies its publisher-provided SHA256.
+Local TLS tests require OpenSSL 3, as installed in Alpine; macOS's bundled
+LibreSSL does not provide the required hostname-check options. On Homebrew,
+prepend /opt/homebrew/opt/openssl@3/bin to PATH when running the suite.
+
+The latest audit changes have not been rerun in a fresh Proxmox LXC because
+the previously supplied host is unreachable. The earlier real LXC and Docker
+results above remain historical evidence for those revisions, not proof of a
+fresh full-stack installation of the current revision. Live external SQL,
+LDAP/S3/TLS, reboot, update and failure recovery need a new LXC validation run
+before an upstream PR can claim those paths. No upstream PR was submitted.

@@ -1,10 +1,14 @@
 name: Validate scripts and settings
 on:
+  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  # Fixed compatibility fixture; production installs still discover the release.
+  REPOSILITE_COMPAT_VERSION: 3.6.5
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -12,9 +16,46 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Install shell validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck shfmt openjdk-21-jdk-headless
+      - name: Prepare verified JDBC compatibility fixture
+        run: |
+          jar="$RUNNER_TEMP/reposilite-test.jar"
+          url="https://maven.reposilite.com/releases/com/reposilite/reposilite/$REPOSILITE_COMPAT_VERSION/reposilite-$REPOSILITE_COMPAT_VERSION-all.jar"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$url" -o "$jar"
+          checksum="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 "$url.sha256")"
+          [[ "$checksum" =~ ^[[:xdigit:]]{64}$ ]]
+          printf '%s  %s\n' "$checksum" "$jar" | sha256sum -c -
+          printf 'REPOSILITE_TEST_JAR=%s\n' "$jar" >>"$GITHUB_ENV"
+          printf 'REPOSILITE_TEST_JAVA=/usr/lib/jvm/java-21-openjdk-%s/bin/java\n' "$(dpkg --print-architecture)" >>"$GITHUB_ENV"
       - name: Check Bash syntax
-        run: bash -n ct/reposilite.sh ct/alpine-reposilite.sh install/reposilite-install.sh
+        run: |
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(git ls-files -z -- '*.sh')
+      - name: Check shell behavior
+        run: |
+          # SC1090/SC1091: Core injects or dynamically sources its runtime.
+          # SC2034/SC2154: Core consumes and supplies shared script globals.
+          while IFS= read -r -d '' script; do
+            shellcheck --exclude=SC1090,SC1091,SC2034,SC2154 "$script"
+          done < <(git ls-files -z -- '*.sh')
+      - name: Check shell formatting
+        run: |
+          while IFS= read -r -d '' script; do
+            shfmt -d -i 2 -ci "$script"
+          done < <(git ls-files -z -- '*.sh')
       - name: Check metadata and configuration behavior
         run: python3 -m unittest discover -s tests -v
       - name: Check whitespace
-        run: git diff --check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ "$BASE_SHA" =~ ^[[:xdigit:]]{40}$ ]] && git cat-file -e "$BASE_SHA^{commit}"; then
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git show --format= --check HEAD
+          fi

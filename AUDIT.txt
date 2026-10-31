@@ -1,0 +1,118 @@
+Reposilite implementation and Community Scripts review
+Reviewed: 2026-10-31
+Scope: standalone distribution; no upstream PR submitted or updated.
+
+Findings fixed
+
+1. High: LDAP and S3 secrets are stored in the shared-settings database.
+   A world-readable SQLite file/data directory exposed those values to other
+   container users. Data/log directories now use 0700, Java uses umask 0077,
+   and updates repair the default database/sidecar permissions to 0600.
+
+2. High: Reposilite 3.6.5 can report settings/API/dashboard success after a
+   repository provider fails to initialize. Installation/update now compare
+   active repository IDs and authenticate a read-only listing of every root.
+   Invalid filesystem quotas and overlapping S3 namespaces are rejected early,
+   using the same whitespace/slash prefix normalization as Reposilite.
+   These probes check read readiness; they do not prove artifact write rights.
+
+3. High: disabled TLS fields could bypass validation and reach a sourced shell
+   configuration. All persisted service values now use shell-safe quoting;
+   optional TLS fields are validated even when TLS is disabled. Configuration
+   and updater code turn off shell tracing before reading secrets.
+
+4. High: upstream LDAP maps users to existing token names and permissions.
+   Fresh installs exclude the initial local manager from LDAP user searches,
+   including custom manager names, and retain the caller's filter. Other
+   privileged token names must still be reserved. Existing LDAP settings are
+   preserved on update and require a manual exclusion if created earlier.
+
+5. High: initial setup could overwrite shared settings in an existing external
+   database. A bounded JDBC metadata preflight now refuses existing user tables
+   before Reposilite starts. It requires a dedicated database and metadata
+   visibility. It does not adopt existing installs or perform a migration.
+   Driver output is suppressed so only a sanitized installer error reaches
+   Core's logs, even if a driver emits its own connection diagnostics.
+
+6. Medium: PostgreSQL's default SSL factory does not use the supplied JVM
+   truststore. Private-CA profiles now choose DefaultJavaSSLFactory unless the
+   caller supplies sslfactory/sslrootcert. PostgreSQL JDBC preflight was tested;
+   full application/TLS setup remains untested.
+
+7. Medium: update health checks relied on the dashboard, did not authenticate
+   repository checks and could honor HTTP proxy settings. They now use saved
+   manager credentials, fail before stopping the service if those are invalid,
+   bypass proxy environment settings and use bounded calls/readiness deadlines.
+   SQLite rollback journals and the init script are included in backups.
+
+8. Medium: CI passed several paths to bash -n, which only checks the first.
+   It now checks every tracked shell file separately, adds ShellCheck/shfmt,
+   checks the actual commit diff and runs JDBC tests using a verified official
+   JAR with Java 21. Credential-bearing JSON metadata now has secret=true.
+
+9. Medium: changing the Core OS selection could create a non-Alpine container
+   before failing. The CT entrypoint now rejects unsupported OS selections
+   before creation and dispatches updates through Core's run_os_update contract.
+
+10. Low: OpenSSL versions differ in the exit status for a hostname mismatch.
+    Certificate validation now consistently reports the same sanitized profile
+    error for either form, while keeping verification enabled.
+
+Community Scripts contracts checked
+
+- Current local-first Core bootstrap, independently overrideable script/Core
+  source roots, prepared FUNCTIONS_FILE_PATH installer payload and lifecycle.
+- CT/container creation separated from in-container installation; no direct
+  Proxmox host commands in the platform-neutral application implementation.
+- Exported application inputs with matching JSON metadata and unattended defaults.
+- Public runtime/release/download/backup helpers, supported Alpine setup/update
+  dispatch, standard messaging, MOTD/customize/cleanup and update exit behavior.
+- Official Bash syntax checks plus additional local quality checks: two-space
+  formatting, ShellCheck and implementation tests.
+  SC1090/SC1091 exclusions cover dynamic Core sources; SC2034/SC2154 cover
+  globals exchanged with Core. No broader ShellCheck suppression is used.
+
+Standalone choices and future PR work
+
+- The slug stays reposilite at the user's request. DevScripts' Alpine naming
+  convention normally uses an alpine- prefix. A future upstream submission
+  needs a maintainer decision; this standalone name is intentional.
+- _CS_DEFAULT_URL points to this public distribution so install/update helpers
+  resolve correctly. An actual DevScripts submission must use that repository's
+  root and pass its ct-base checks. The historical upstream copy is not updated.
+- Reposilite publishes executable JARs in its Maven repository rather than
+  GitHub binary assets. Core release discovery/download helpers are used with
+  the official Maven SHA256; an archive extractor would unpack the runnable JAR.
+- The standard-library Python helper renders configuration; it is not the
+  deployed application and needs no pip packages. The Java source preflight
+  uses the installed full JDK 21 and the JDBC drivers in the application JAR.
+- Extra helper-file packaging, the naming exception and maintenance scope need
+  upstream review if a PR is requested later. Native MySQL/PostgreSQL are
+  experimental upstream; ARM64/Incus are not claimed tested.
+- Future PRs must follow the new-application DevScripts route, eligibility and
+  AI-disclosure rules, and include truthful target-platform test evidence.
+- Current automated validation: 44 tests, including four actual-JAR JDBC checks.
+  Separate real MariaDB/PostgreSQL preflight tests passed for empty/populated DBs and
+  invalid credentials, preserving existing data. A current default-SQLite
+  Alpine Docker/OpenRC harness install also passed repository/permission checks.
+  Earlier LXC/Docker evidence
+  and the current fresh-LXC test gap are detailed in TESTING.txt. This review
+  does not claim the current revision is PR-ready.
+- No reverse proxy, OIDC gateway or automatic ACME service is installed.
+
+Primary references reviewed
+
+https://community-scripts.org/docs/contribution/contributing
+https://community-scripts.org/docs/contribution/code-audit
+https://community-scripts.org/docs/ct/detailed_guide
+https://community-scripts.org/docs/install/detailed_guide
+https://community-scripts.org/docs/contribution/templates_json/appname
+https://github.com/community-scripts/DevScripts/blob/main/AGENTS.md
+https://github.com/community-scripts/DevScripts/blob/main/.github/pull_request_template.md
+https://github.com/community-scripts/DevScripts/blob/main/.github/workflows/bash-syntax.yml
+https://github.com/community-scripts/DevScripts/blob/main/.github/workflows/ct-base.yml
+https://github.com/community-scripts/ProxmoxVE/blob/main/CONTRIBUTING.md
+https://reposilite.com/guide/ldap
+https://github.com/dzikoysk/reposilite/releases/tag/3.6.5
+https://jdbc.postgresql.org/documentation/ssl/
+https://github.com/OpenRC/openrc/blob/master/man/openrc-run.8

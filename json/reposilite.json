@@ -124,14 +124,22 @@
       "name": "var_repositories_json",
       "label": "Advanced repository definitions (JSON)",
       "type": "text",
+      "secret": true,
       "help": "Optional native Reposilite repositories array with fs or s3 storage. Overrides the profile storage and repository defaults."
     },
     {
       "name": "var_integrations_json",
       "label": "Database, storage, LDAP and native TLS profile",
       "type": "text",
+      "secret": true,
       "default": "{}",
       "help": "Optional JSON profile. Advanced Settings offers a guided TTY setup. For secrets, prefer var_integrations_file pointing to a mode-600 JSON file on the Proxmox host. See examples/integrations.json."
+    },
+    {
+      "name": "var_integrations_file",
+      "label": "Private integration profile file on Proxmox host",
+      "type": "text",
+      "help": "Optional path to a mode-600 JSON integration profile on the Proxmox host. Keeps profile credentials out of command arguments."
     }
   ]
 }

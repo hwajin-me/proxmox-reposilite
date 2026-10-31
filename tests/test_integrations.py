@@ -1,5 +1,4 @@
 """Validate secret handling, native configuration and connection boundaries."""
-import copy
 import importlib.util
 import json
 import os
@@ -50,6 +49,12 @@ class IntegrationTests(unittest.TestCase):
             query = parse_qs(urlsplit(jdbc.removeprefix("jdbc:")).query)
             self.assertEqual(query["password"], [DB["password"]])
 
+    def test_postgresql_private_ca_uses_the_jvm_truststore(self):
+        profile = {"database": {**DB, "type": "postgresql"}, "trustedCertificates": ["private-ca"]}
+        self.assertEqual(CONFIG.database_parameters(profile)["sslfactory"], "org.postgresql.ssl.DefaultJavaSSLFactory")
+        profile["database"]["parameters"] = {"sslrootcert": "/etc/postgresql/root.crt"}
+        self.assertNotIn("sslfactory", CONFIG.database_parameters(profile))
+
     def test_ldap_and_s3_use_native_field_names_and_isolate_repositories(self):
         root = self.root()
         CONFIG.render({"storage": S3, "ldap": LDAP}, root)
@@ -72,11 +77,20 @@ class IntegrationTests(unittest.TestCase):
             {"storage": {**S3, "pathStyle": "yes"}},
             {"storage": {**S3, "endpoint": "https://user:secret@s3.example.com"}},
             {"storage": {**S3, "prefix": "../other"}},
+            {"storage": {**S3, "prefix": " ../other "}},
             {"storage": {"type": "fs", "root": "/etc"}},
             {"storage": {"type": "fs", "root": "/srv/a/../b"}},
             {"ldap": {**LDAP, "ssl": "false"}}, {"ldap": {**LDAP, "userType": "ADMIN"}},
             {"tls": {"mode": "provided", "hostname": "repo.example.com"}},
             {"tls": {"mode": "self-signed", "hostname": "repo.example.com", "port": 8080}},
+            {"tls": {"mode": "off", "hostname": "$(touch /tmp/never-run)"}},
+            {"tls": {"mode": "off", "port": "$(touch /tmp/never-run)"}},
+            {"tls": {"mode": "off", "port": False}},
+            {"storage": {"type": "fs", "root": False}},
+            {"storage": {**S3, "endpoint": False}},
+            {"ldap": {**LDAP, "userFilter": "(uid=user"}},
+            {"ldap": {**LDAP, "userFilter": "(uid=user)(cn=other)"}},
+            {"ldap": {**LDAP, "userFilter": r"(cn=bad\escape)"}},
         ]:
             with self.subTest(profile=profile), self.assertRaises(ValueError):
                 CONFIG.validate(profile)
@@ -108,6 +122,24 @@ class IntegrationTests(unittest.TestCase):
         file.chmod(0o600)
         result = subprocess.run(["python3", str(ROOT / "misc/reposilite-config.py"), "validate", "--file", str(file)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_shell_configuration_cannot_execute_supplied_values(self):
+        root = self.root()
+        marker = root / "should-not-exist"
+        value = f'$(touch {marker}) "quoted" \\ text'
+        config = root / "service.conf"
+        config.write_text(CONFIG.shell_config("tls_host\0" + value + "\0"))
+        result = subprocess.run(["bash", "-c", 'source "$1"; printf "%s" "$tls_host"', "test", str(config)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, value)
+        self.assertFalse(marker.exists())
+
+    def test_ldap_filter_excludes_the_local_manager(self):
+        root = self.root()
+        with patch.dict(os.environ, {"var_admin_user": "team-manager"}):
+            CONFIG.render({"ldap": {**LDAP, "userFilter": "(memberOf=cn=maven,dc=example,dc=com)"}}, root)
+        ldap = json.loads((root / "etc/reposilite/ldap.json").read_text())
+        self.assertEqual(ldap["userFilter"], "(&(memberOf=cn=maven,dc=example,dc=com)(!(uid=team-manager)))")
 
 
 if __name__ == "__main__":

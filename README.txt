@@ -26,7 +26,8 @@ Access and first login
   The service starts without a token secret in its process arguments after
   installation. Tokens are stored as hashes in the configured SQL database. The config retains the
   initial plaintext secret for first login; keep it private. If you rotate the
-  token in the dashboard, update your saved credentials accordingly.
+  token in the dashboard, update admin_user/admin_secret in that file too.
+  Updates authenticate with these saved credentials before stopping the service.
   Native HTTPS is available in the integration profile; no reverse proxy is installed.
   Older installations retain their existing bootstrap-token setup on update.
 
@@ -43,12 +44,15 @@ Updates and data
   stopping the service. After a clean stop, a root-only backup is created under
   /opt/reposilite-backups/<timestamp>-<pid>/ with separate application/ and state/
   folders. State includes service configuration, local configuration and the
-  default SQLite database plus any WAL/SHM files. Artifact repositories and
+  default SQLite database plus any WAL/SHM/rollback-journal files. Artifact repositories and
   custom/external databases still require your own backups.
 
   A backup failure restarts the unchanged application where possible. A failed
-  replacement, service start or HTTP health check restores the previous JAR and
-  version marker and leaves the service stopped. The state backup is retained;
+  replacement, service start or repository readiness check restores the previous
+  JAR, version marker and init script and leaves the service stopped. Checks
+  authenticate, compare active repository IDs and list each repository root;
+  a working dashboard alone is insufficient. API calls have time limits and
+  local probes bypass HTTP proxy environment settings. The state backup is retained;
   the live database is not overwritten automatically because the new release
   might have migrated it. Inspect /var/log/reposilite before recovery.
 
@@ -57,6 +61,11 @@ Updates and data
   back to that original path, preserving ownership/permissions. For example,
   the service configuration is at state/files/etc/conf.d/reposilite. A full
   Proxmox backup remains the recovery path for repositories and external data.
+
+  The data and log directories are mode 0700; OpenRC starts Java with umask 0077.
+  SQLite can contain plaintext LDAP/S3 secrets, so keep the whole data directory
+  private. Updates also repair permissions on the default SQLite database and
+  its sidecars. A custom filesystem mount needs equivalent access controls.
 
 Community Scripts Core compatibility
 
@@ -112,10 +121,12 @@ Application settings
 
     [{"id":"stable","visibility":"PUBLIC","storageProvider":{"type":"fs","quota":"60%","mount":""},"redeployment":false,"preserveSnapshots":false,"proxied":[]},{"id":"internal","visibility":"PRIVATE","storageProvider":{"type":"fs","quota":"20%","mount":""},"redeployment":true,"preserveSnapshots":true,"proxied":[]}]
 
-  This allows per-repository quotas, mounts and upstream proxy definitions in
-  Reposilite's native format. The API validates the full schema at installation;
+  This allows per-repository quotas and mounts in Reposilite's native format.
+  Filesystem quota overrides accept 1-100% or positive sizes such as 500MB.
+  Validation rejects overlapping S3 namespaces and malformed provider settings
+  before creating a container. The API validates the remaining schema at installation;
   ensure custom mount paths are writable. Avoid putting secrets in a shared
-  command. Repository and dashboard defaults are seeded into SQLite once using
+  command. Repository and dashboard defaults are seeded into the configured SQL database once using
   the manager API. They remain editable in the dashboard and are not reapplied
   by update. Changing the original var_* inputs later does not reconfigure an
   existing installation; use the dashboard or edit /etc/conf.d/reposilite.
@@ -152,6 +163,12 @@ Native DB, external storage, LDAP and TLS
     {"sslmode":"verify-full"}. Supply trustedCertificates for private CAs.
     External databases require independent, consistent backups before update.
     Use a dedicated, empty database on first install: settings are seeded once.
+    Before starting Reposilite, a Java 21/JDBC metadata check verifies the
+    connection and refuses existing user tables. The database account must be
+    able to enumerate all tables. This check does not create tables or adopt an
+    existing Reposilite database. Connection details and errors are kept private.
+    For PostgreSQL with trustedCertificates, the renderer selects the JVM SSL
+    factory so those CAs are used, unless sslfactory/sslrootcert is explicit.
 
   Artifact storage:
     Local filesystem remains the default. S3 profiles support AWS S3, MinIO,
@@ -193,9 +210,14 @@ Native DB, external storage, LDAP and TLS
     write permissions: grant the needed token permissions in the dashboard.
     The generated local manager remains available for recovery. If the default
     manager name admin is used with LDAP, it becomes local-manager-<random>.
-    Custom manager/token names must be reserved and must never match directory
+    New installations add an LDAP user-filter exclusion for the initial local
+    manager, including a custom manager name, while preserving your filter.
+    Reserve all other privileged token names so they never match directory
     usernames: upstream LDAP reuses existing tokens by name, including their
-    permissions. There is no automatic LDAP group-to-permission mapping.
+    permissions. Updates preserve existing LDAP settings; installations made
+    before this exclusion must add it in the dashboard themselves. For uid and
+    manager maintainer, combine your filter with (!(uid=maintainer)) using AND.
+    There is no automatic LDAP group-to-permission mapping.
     Upstream token
     authentication can accept a previously issued persistent token independently
     of LDAP; choose mapped token type deliberately and review token revocation.
@@ -224,8 +246,11 @@ Native DB, external storage, LDAP and TLS
   for LDAP/repositories and edit native config/service settings for DB/TLS.
 
   JSON metadata describes application variables for catalog integration.
+  Credential-bearing JSON inputs are marked secret; service configuration values
+  are shell-escaped. Application configuration code disables shell tracing.
 
   ARM64 and Incus are not tested. Core asks before attempting unverified ARM64.
+  See TESTING.txt for validation scope and AUDIT.txt for the contribution review.
 
 Sources
   https://reposilite.com/guide/general

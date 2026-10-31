@@ -9,6 +9,7 @@ SOURCE = (Path(__file__).resolve().parents[1] / "install/reposilite-install.sh")
 SEED = SOURCE.split("  # Seed editable settings once", 1)[1].split('  msg_ok "Configured Reposilite"', 1)[0]
 SEED = SEED.split("\n", 1)[1]
 STUBS = r'''
+CURL_LOCAL=(--noproxy '*' --connect-timeout 5 --max-time 30)
 msg_error() { echo "$*" >&2; }
 sleep() { :; }
 sed() {
@@ -27,6 +28,7 @@ curl() {
   count=$(cat "$FIXTURE/calls")
   count=$((count + 1))
   echo "$count" >"$FIXTURE/calls"
+  printf '%s %s\n' "$count" "$*" >>"$FIXTURE/requests"
   [[ "${FAULT:-}" != "$count" ]] || return 1
   [[ "${FAULT:-}" != verify || "$count" -lt 9 ]] || return 1
   output=""
@@ -40,6 +42,14 @@ curl() {
       3) echo '{"title":"Original","description":"Original"}' >"$output" ;;
       5) echo '{"ldap":{"enabled":false}}' >"$output" ;;
       8) echo '{"permissions":[{"identifier":"access-token:manager"}]}' >"$output" ;;
+      10)
+        case "${FAULT:-}" in
+          missing-provider) echo '{"type":"DIRECTORY","files":[{"name":"stable"}]}' >"$output" ;;
+          invalid-provider) echo '{"type":"FILE","files":[{"name":"stable"},{"name":"internal"}]}' >"$output" ;;
+          *) echo '{"type":"DIRECTORY","files":[{"name":"stable"},{"name":"internal"}]}' >"$output" ;;
+        esac
+        ;;
+      11|12) echo '{"type":"DIRECTORY","files":[]}' >"$output" ;;
     esac
   fi
 }
@@ -47,7 +57,7 @@ curl() {
 
 
 class BootstrapTests(unittest.TestCase):
-    def run_seed(self, fault):
+    def run_seed(self, fault=""):
         temporary = tempfile.TemporaryDirectory(prefix="reposilite-bootstrap-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -67,6 +77,9 @@ class BootstrapTests(unittest.TestCase):
             "var_repository_quota": "75", "var_redeployment": "no", "var_preserve_snapshots": "no",
             "var_repositories_json": "", "var_dashboard_title": "Team Maven", "var_dashboard_description": "Team",
         })
+        self.assertNotIn("sensitive fixture", result.stdout + result.stderr)
+        if (root / "requests").exists():
+            self.assertNotIn("sensitive fixture", (root / "requests").read_text())
         return root, result
 
     def test_every_failed_api_step_removes_private_files_and_stops_service(self):
@@ -77,7 +90,6 @@ class BootstrapTests(unittest.TestCase):
                 self.assertFalse((root / "private").exists())
                 self.assertIn("stop", (root / "service-events").read_text())
                 self.assertIn('bootstrap_secret="temporary"', (root / "config").read_text())
-                self.assertNotIn("sensitive fixture", result.stdout + result.stderr)
 
     def test_restart_failure_removes_private_files_after_verified_token(self):
         root, result = self.run_seed("restart")
@@ -91,6 +103,43 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((root / "private").exists())
         self.assertEqual((root / "service-events").read_text().splitlines(), ["restart", "stop"])
+
+    def test_provider_request_and_missing_provider_failures_stop_after_restart(self):
+        for fault in ["10", "missing-provider", "invalid-provider"]:
+            with self.subTest(fault=fault):
+                root, result = self.run_seed(fault)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "private").exists())
+                self.assertFalse((root / "storage.json").exists())
+                self.assertFalse((root / "ldap.json").exists())
+                self.assertEqual((root / "calls").read_text().strip(), "10")
+                self.assertEqual((root / "service-events").read_text().splitlines(), ["restart", "stop"])
+                self.assertIn('bootstrap_secret=""', (root / "config").read_text())
+
+    def test_success_verifies_active_providers_before_private_cleanup(self):
+        root, result = self.run_seed()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((root / "calls").read_text().strip(), "12")
+        self.assertEqual((root / "service-events").read_text().splitlines(), ["restart"])
+        self.assertFalse((root / "private").exists())
+        self.assertFalse((root / "storage.json").exists())
+        self.assertFalse((root / "ldap.json").exists())
+        self.assertIn('bootstrap_secret=""', (root / "config").read_text())
+        self.assertIn('admin_secret="persistent"', (root / "config").read_text())
+        requests = (root / "requests").read_text().splitlines()
+        self.assertTrue(all("--noproxy *" in request for request in requests))
+        self.assertTrue(all("--connect-timeout 5" in request and "--max-time" in request for request in requests))
+        self.assertIn("/api/maven/details", requests[-1])
+        self.assertIn(str(root / "private/admin-auth"), requests[-1])
+
+
+    def test_each_repository_storage_probe_must_succeed(self):
+        for count in (11, 12):
+            with self.subTest(step=count):
+                root, result = self.run_seed(str(count))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "private").exists())
+                self.assertEqual((root / "service-events").read_text().splitlines(), ["restart", "stop"])
 
 
 if __name__ == "__main__":
