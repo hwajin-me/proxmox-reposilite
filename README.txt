@@ -74,8 +74,10 @@ Updates and data
   the service configuration is at state/files/etc/conf.d/reposilite. A full
   Proxmox backup remains the recovery path for repositories and external data.
 
-  Java explicitly limits org.jetbrains.exposed SQL logging to WARN. Upstream
-  3.6.5 otherwise logs settings updates, including storage credentials, at DEBUG.
+  Java explicitly limits org.jetbrains.exposed SQL logging to WARN and both
+  built-in file/console writers to INFO. Upstream 3.6.5 otherwise logs settings
+  updates, including storage credentials, at DEBUG. The writer filters also
+  exclude application DEBUG dumps when shared configuration is invalid.
   Existing installations missing this protection receive a verified same-version
   deployment through the normal backup/recovery path even when already current.
   Audit older logs and rotate any exposed credentials separately.
@@ -271,6 +273,9 @@ Native DB, external storage, LDAP and TLS
     mapped token can therefore authenticate independently of a new directory bind;
     TEMPORARY is not a promise of immediate AD password/disable revocation. Choose
     the mapped type deliberately and revoke issued tokens when access is removed.
+    Basic authentication also caches results for one minute after the last
+    access. After deleting a token, restart the service if immediate cache
+    invalidation is required; active requests can extend that cache lifetime.
     OIDC has no native setting in the verified Reposilite release and is excluded.
 
   Native TLS:

@@ -143,7 +143,7 @@ fi
 description="Reposilite Maven repository manager"
 [ ! -f /etc/reposilite/database.env ] || . /etc/reposilite/database.env
 command="/usr/bin/java"
-command_args="${java_opts} -Dtinylog.level@org.jetbrains.exposed=warn -jar /opt/reposilite/reposilite.jar --working-directory=${data_directory:-/var/lib/reposilite} --local-configuration=/etc/reposilite/configuration.cdn --hostname=0.0.0.0 --port=${http_port:-8080}"
+command_args="${java_opts} -Dtinylog.level@org.jetbrains.exposed=warn -Dtinylog.writerFile.level=info -Dtinylog.writerJournalist.level=info -jar /opt/reposilite/reposilite.jar --working-directory=${data_directory:-/var/lib/reposilite} --local-configuration=/etc/reposilite/configuration.cdn --hostname=0.0.0.0 --port=${http_port:-8080}"
 if [ -n "${bootstrap_secret}" ]; then
   command_args="${command_args} --token=${bootstrap_user:-${admin_user:-admin}}:${bootstrap_secret}"
 fi

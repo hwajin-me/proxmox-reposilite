@@ -96,7 +96,7 @@ Native integrations validation (2026-10-31):
   connectivity became unavailable. The initial temporary LXC used an older
   cached installer; its result is not counted as native integration validation.
 
-Additional limits:
+Historical limits at this stage (see the later dated production validation):
 - Actual AWS S3/MinIO/R2, external filesystem bind mounts and full application
   setup with MySQL/PostgreSQL have not been exercised. S3 uses the verified native 3.6.5 field schema;
   MySQL/PostgreSQL retain upstream's experimental status.
@@ -158,12 +158,11 @@ Local TLS tests require OpenSSL 3, as installed in Alpine; macOS's bundled
 LibreSSL does not provide the required hostname-check options. On Homebrew,
 prepend /opt/homebrew/opt/openssl@3/bin to PATH when running the suite.
 
-The latest audit changes have not been rerun in a fresh Proxmox LXC because
-the previously supplied host is unreachable. The earlier real LXC and Docker
-results above remain historical evidence for those revisions, not proof of a
-fresh full-stack installation of the current revision. Live external SQL,
-LDAP/S3/TLS, reboot, update and failure recovery need a new LXC validation run
-before an upstream PR can claim those paths. No upstream PR was submitted.
+At this audit stage, a fresh Proxmox run was unavailable because the previously
+supplied host was unreachable. The earlier LXC/Docker results describe their
+own revisions. The 2026-11-01 production validation below supplies new evidence
+for its explicitly listed paths; it does not retroactively test the other
+platforms or production fault recovery. No upstream PR was submitted.
 
 Second implementation/Core audit (after a86112b, 2026-10-31):
 - 50 tests passed with the actual 3.6.5 JAR/Java 21, including five optional JDBC
@@ -193,7 +192,8 @@ Second implementation/Core audit (after a86112b, 2026-10-31):
 
 For official snapshots, compatibility findings and unresolved submission work,
 see COMPATIBILITY.txt. The prepared English PR title/body is in PR-DRAFT.txt.
-Current full PVE, Incus/ARM64 and cross-version migration limits remain unchanged.
+Full PVE was pending at this audit stage; see the later production run below.
+Incus/ARM64 and cross-version migration limits remain unchanged.
 
 Unattended update integration (2026-10-31):
 - Complete local suite: 89 methods, 87 passed and two Linux-only checks skipped
@@ -243,9 +243,10 @@ To include official host-tool/Core contract checks locally, additionally set:
   REPOSILITE_TEST_CORE_UPDATE=/absolute/path/core-update.sh
 
 Use the exact revisions/hashes in .github/workflows/check.yml. Without these
-four variables the optional official integration checks are skipped. Actual
+four variables the optional official integration checks are skipped. At this stage, actual
 Proxmox pct selection, full-LXC backup/restore, cron execution, OS reboot and
-current end-to-end installation remain pending on a reachable host. Upstream
+end-to-end installation were pending. The later production run covers selected
+paths only. Upstream
 update-apps dry-run can start stopped containers and repair legacy entrypoints;
 it must not be used as a read-only host probe. See AUTO-UPDATES.txt.
 
@@ -322,3 +323,27 @@ Production deployment and SQL logging protection (2026-11-01):
 
 Tinylog system-property configuration reference:
 https://tinylog.org/configuration/
+
+Built-in writer protection and real AD LDAPS (2026-11-01):
+- Both default tinylog writers now have INFO thresholds in addition to the
+  Exposed WARN rule. This covers application DEBUG dumps outside the SQL logger,
+  including the shared-configuration deserialization path. Existing SQL-only or
+  partially protected installations receive the same verified repair transaction.
+- Complete local suite: 107 methods, 105 passed and two Linux-only checks skipped
+  on macOS. Five actual-JAR logging tests include the original SQL reproduction
+  and application DEBUG/INFO/WARN sentinels. With the native Journalist subscriber
+  and original rolling writer, the upstream/SQL-only configurations retain all
+  three levels; the full policy drops DEBUG and keeps INFO/WARN in both console
+  and rolling/gzip files. Shell syntax, ShellCheck, shfmt and whitespace passed.
+- The deployed PVE LXC was subsequently configured for native AD LDAPS using a
+  dedicated ordinary search account and strict CA/hostname verification. Only
+  LDAP fields were updated; SQL/S3/repositories/local manager stayed unchanged.
+  One restart applied the captured ldap/ldaps protocol and all logging guards.
+- A fresh AD user logged in and received a TEMPORARY token with empty
+  permissions/routes. Wrong passwords returned 401, manager/settings/write APIs
+  returned 403, and the refused upload created no object. Local manager access
+  still worked; LDAP bind/test, S3 and manager secrets were absent from logs.
+- Disabling the AD user alone left its issued local token usable. Deleting that
+  exact token, then making no requests for about 75 seconds, produced 401 while
+  preserving the manager token. This verifies the documented native revocation
+  limitation; it does not claim immediate directory-driven session revocation.

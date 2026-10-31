@@ -61,18 +61,21 @@ curl() {
 
 
 class BootstrapTests(unittest.TestCase):
-    def test_service_filters_all_exposed_sql_packages_before_jar(self):
+    def test_service_filters_both_writers_and_exposed_packages_before_jar(self):
         init = SOURCE.split("cat >/etc/init.d/reposilite <<'EOF'", 1)[1].split("\nEOF", 1)[0]
         assignment = next(line for line in init.splitlines() if line.startswith('command_args='))
         # Existing user JVM arguments may set a less restrictive threshold;
-        # the installer property must be the final JVM option before -jar.
+        # the installer filters must be the final JVM options before -jar.
         result = subprocess.run(["sh", "-c",
-                                 'java_opts="-Xmx256m -Dtinylog.level@org.jetbrains.exposed=debug"; '
+                                 'java_opts="-Xmx256m -Dtinylog.level@org.jetbrains.exposed=debug '
+                                 '-Dtinylog.writerFile.level=debug -Dtinylog.writerJournalist.level=debug"; '
                                  + assignment + '; printf "%s" "$command_args"'],
                                 capture_output=True, text=True, check=True)
         arguments = shlex.split(result.stdout)
         jar = arguments.index("-jar")
-        self.assertEqual(arguments[jar - 1], "-Dtinylog.level@org.jetbrains.exposed=warn")
+        self.assertEqual(arguments[jar - 3:jar], ["-Dtinylog.level@org.jetbrains.exposed=warn",
+                                                "-Dtinylog.writerFile.level=info",
+                                                "-Dtinylog.writerJournalist.level=info"])
         self.assertIn("--local-configuration=/etc/reposilite/configuration.cdn", arguments[jar + 1:])
 
     def run_seed(self, fault=""):

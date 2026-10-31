@@ -1,4 +1,4 @@
-Community Scripts compatibility review — 2026-10-31
+Community Scripts compatibility review — 2026-11-01
 
 Result: standalone Core integration is compatible with the checked contracts.
 This repository is not yet an upstream-ready DevScripts patch. This preparation
