@@ -53,6 +53,8 @@ Community Scripts generator and contribution
   json/reposilite.json for catalog integration. The public repository can
   be used directly before official review and promotion.
   Official listing is subject to the Community Scripts maintainers' review.
+  Earlier alpine-reposilite install URLs redirect to the reposilite script;
+  existing configuration is preserved.
   Contribution PR: https://github.com/community-scripts/DevScripts/pull/2489
 
   Source files:

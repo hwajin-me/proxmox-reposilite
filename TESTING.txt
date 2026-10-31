@@ -26,3 +26,20 @@ Not tested:
 
 Public and DevScripts copies differ only in _CS_DEFAULT_URL so each resolves
 its own matching installer and generated update entrypoint.
+
+Customization validation (2026-10-31):
+- Fresh renamed reposilite install with port 9091, /srv data directory, 128 MiB
+  heap, maintainer token, stable/nightly public and internal private repositories.
+- 80% per-repository quota, redeployment and snapshot retention applied.
+- Quoted title with literal dollar text preserved; configured description applied.
+- Public access, private unauthenticated rejection, authenticated access and
+  successful artifact overwrite tested through HTTP.
+- Native JSON repository overrides with distinct 60%/20% quotas and different
+  redeployment policies applied through the production seeding code.
+- Application prompts exercised in a real terminal with current Core helpers.
+- Seven automated input/metadata tests: python3 tests/test_settings.py.
+- Forced redeployment after dashboard/API edits preserved service config hash,
+  custom port/data directory/token, repository settings and dashboard settings
+  byte-for-byte (canonical JSON), plus an authenticated private artifact.
+- Existing old-slug installation updated through the compatibility entrypoint;
+  service configuration hash unchanged and application still healthy.
