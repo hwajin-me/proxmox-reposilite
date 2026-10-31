@@ -273,3 +273,12 @@ Post-install cleanup validation (2026-10-31):
   not a new full Proxmox install or cross-version migration test.
 - Existing installations are not subjected to automatic package removal by the
   application updater. APK caches still use the standard Core cleanup lifecycle.
+
+Managed native TLS backup regression (2026-11-01):
+- Complete local suite: 94 methods, 92 passed and two Linux-only checks skipped
+  on macOS, using the verified JAR/Java 21 and official Core/host-tool fixtures.
+- A rotated CertMate certificate can live outside /etc/reposilite behind PEM
+  symlinks. The updater now includes /etc/certmate/tls/reposilite when present.
+  The regression test removes the original generation after backup and verifies
+  that the copied current link still resolves to both PEMs, with the private
+  key remaining mode 0600. This tests backup completeness, not ACME issuance.

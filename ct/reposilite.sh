@@ -200,6 +200,8 @@ GUARD
     BACKUP_DIR="$BACKUP_ROOT/state"
     STATE_PATHS=(/etc/conf.d/reposilite)
     [[ ! -d /etc/reposilite ]] || STATE_PATHS+=(/etc/reposilite)
+    # Native TLS may reference an atomically rotated CertMate generation.
+    [[ ! -d /etc/certmate/tls/reposilite ]] || STATE_PATHS+=(/etc/certmate/tls/reposilite)
     for STATE_FILE in configuration.cdn reposilite.db reposilite.db-wal reposilite.db-shm reposilite.db-journal; do
       [[ ! -f "${data_directory:-/var/lib/reposilite}/$STATE_FILE" ]] || STATE_PATHS+=("${data_directory:-/var/lib/reposilite}/$STATE_FILE")
     done

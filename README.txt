@@ -51,7 +51,9 @@ Updates and data
   stopping the service. After a clean stop, a root-only backup is created under
   /opt/reposilite-backups/<timestamp>-<pid>/ with separate application/ and state/
   folders. State includes service configuration, local configuration and the
-  default SQLite database plus any WAL/SHM/rollback-journal files. Artifact repositories and
+  default SQLite database plus any WAL/SHM/rollback-journal files. When present,
+  /etc/certmate/tls/reposilite is copied too, preserving the current certificate
+  generation even when application PEM paths are symlinks. Artifact repositories and
   custom/external databases still require your own backups.
 
   A backup failure restarts the unchanged application where possible. A failed

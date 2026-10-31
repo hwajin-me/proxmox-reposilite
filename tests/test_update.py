@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -141,7 +142,7 @@ install() {
 
 class UpdateTests(unittest.TestCase):
     def run_update(self, fault="", tls=False, legacy=False, manager_secret=MANAGER_SECRET, trace=False,
-                   readiness_timeout=None, storage_timeout=None, custom_init=INIT_CONTENT, pending=False):
+                   readiness_timeout=None, storage_timeout=None, custom_init=INIT_CONTENT, pending=False, managed_tls=False):
         temporary = tempfile.TemporaryDirectory(prefix="reposilite-update-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -168,6 +169,17 @@ class UpdateTests(unittest.TestCase):
         if tls:
             (root / "etc/reposilite/tls").mkdir(parents=True)
             (root / "etc/reposilite/tls/private-key.pem").write_text("private-key-fixture")
+            if managed_tls:
+                managed = root / "etc/certmate/tls/reposilite"
+                generation = managed / "releases/baseline"
+                generation.mkdir(parents=True)
+                (generation / "privkey.pem").write_text("managed-private-key")
+                (generation / "privkey.pem").chmod(0o600)
+                (generation / "fullchain.pem").write_text("managed-certificate")
+                (managed / "current").symlink_to("releases/baseline")
+                (root / "etc/reposilite/tls/private-key.pem").unlink()
+                (root / "etc/reposilite/tls/private-key.pem").symlink_to(managed / "current/privkey.pem")
+                (root / "etc/reposilite/tls/certificate.pem").symlink_to(managed / "current/fullchain.pem")
             with (root / "etc/conf.d/reposilite").open("a") as config:
                 config.write('tls_enabled=yes\ntls_host=repo.example.test\ntls_port=8443\n')
         for suffix in ["", "-wal", "-shm", "-journal"]:
@@ -284,6 +296,17 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn("--insecure", health)
         saved = list((root / "opt/reposilite-backups").glob("*/state/files/**/private-key.pem"))
         self.assertEqual(saved[0].read_text(), "private-key-fixture")
+
+    def test_managed_tls_backup_is_readable_after_the_original_generation_is_gone(self):
+        root, result = self.run_update(tls=True, managed_tls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = list((root / "opt/reposilite-backups").glob("*/state/files/**/certmate/tls/reposilite"))
+        self.assertEqual(len(saved), 1)
+        self.assertTrue((saved[0] / "current").is_symlink())
+        shutil.rmtree(root / "etc/certmate/tls/reposilite")
+        self.assertEqual((saved[0] / "current/privkey.pem").read_text(), "managed-private-key")
+        self.assertEqual((saved[0] / "current/fullchain.pem").read_text(), "managed-certificate")
+        self.assertEqual((saved[0] / "current/privkey.pem").stat().st_mode & 0o777, 0o600)
 
     def test_legacy_bootstrap_credentials_remain_usable_for_update(self):
         root, result = self.run_update(legacy=True)
