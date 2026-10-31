@@ -38,11 +38,11 @@
   "notes": [
     {
       "type": "info",
-      "text": "The initial manager token defaults to admin. Its name and random secret are stored in /etc/conf.d/reposilite inside the container."
+      "text": "A persistent manager token is created automatically. Read admin_user and admin_secret in /etc/conf.d/reposilite inside the container."
     },
     {
       "type": "info",
-      "text": "Create a persistent manager token with token-generate administrator m in the dashboard console, then clear bootstrap_secret in /etc/conf.d/reposilite and restart Reposilite."
+      "text": "Back up the configured data directory: SQLite stores tokens and dashboard settings alongside the artifact repositories."
     },
     {
       "type": "warning",
@@ -71,7 +71,7 @@
     },
     {
       "name": "var_admin_user",
-      "label": "Initial manager token name",
+      "label": "Manager token name",
       "type": "text",
       "default": "admin"
     },

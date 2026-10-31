@@ -63,6 +63,7 @@ class SettingsTests(unittest.TestCase):
             ("var_redeployment", "true"), ("var_preserve_snapshots", "maybe"),
             ("var_public_repositories", "public,,other"), ("var_public_repositories", "releases,"),
             ("var_public_repositories", "public/../../etc"),
+            ("var_public_repositories", "my repo"), ("var_public_repositories", "public\nother"),
             ("var_public_repositories", "private"),
         ]:
             with self.subTest(field=field, value=value):
@@ -76,6 +77,20 @@ class SettingsTests(unittest.TestCase):
         result, _ = self.run_settings(var_public_repositories="-", var_private_repositories="internal")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_repository_lists_accept_whitespace(self):
+        result, values = self.run_settings(var_public_repositories=" stable, nightly ", var_private_repositories=" internal ")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(values["var_public_repositories"], "stable,nightly")
+        self.assertEqual(values["var_private_repositories"], "internal")
+
+    def test_heap_leaves_container_memory_headroom(self):
+        result, _ = self.run_settings(RAM_SIZE="512", var_java_heap="512")
+        self.assertNotEqual(result.returncode, 0)
+        result, _ = self.run_settings(RAM_SIZE="512", var_java_heap="384")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result, _ = self.run_settings(RAM_SIZE="broken")
+        self.assertNotEqual(result.returncode, 0)
+
     def test_json_override_accepts_per_repository_settings(self):
         custom = [{"id": "maven", "visibility": "PRIVATE", "storageProvider": {"type": "fs", "quota": "25%", "mount": ""}, "redeployment": True, "proxied": []}]
         result, values = self.run_settings(var_repositories_json=json.dumps(custom))
@@ -87,6 +102,21 @@ class SettingsTests(unittest.TestCase):
         for value in ["{", "{}", "[]", '[{"id":"bad"}]', json.dumps([repository, repository]), json.dumps([{**repository, "id": "../etc"}])]:
             with self.subTest(value=value):
                 result, _ = self.run_settings(var_repositories_json=value)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_native_repository_json_field_types(self):
+        repository = {"id": "maven", "visibility": "PUBLIC", "storageProvider": {"type": "fs", "quota": "25%", "mount": ""}}
+        invalid = [
+            {**repository, "redeployment": "yes"},
+            {**repository, "preserveSnapshots": None},
+            {**repository, "proxied": "https://example.com"},
+            {**repository, "storageProvider": {"type": "fs", "quota": 25}},
+            {**repository, "storageProvider": {"type": "fs", "quota": ""}},
+            {**repository, "storageProvider": {"type": "fs", "quota": "25%", "mount": False}},
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                result, _ = self.run_settings(var_repositories_json=json.dumps([value]))
                 self.assertNotEqual(result.returncode, 0)
 
 

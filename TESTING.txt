@@ -43,3 +43,22 @@ Customization validation (2026-10-31):
   byte-for-byte (canonical JSON), plus an authenticated private artifact.
 - Existing old-slug installation updated through the compatibility entrypoint;
   service configuration hash unchanged and application still healthy.
+
+Standalone improvements validation (2026-10-31):
+- Fresh Alpine LXC install created and verified a persistent manager token.
+- Temporary bootstrap token cleared; Java command line has no --token argument.
+- Service configuration mode 0600; bootstrap authentication/payload files removed
+  from /run after setup; persistent login succeeds after installer restart.
+- Repository-list whitespace normalization, custom port and data directory applied.
+- A real held update lock rejected a concurrent update before service interruption.
+- Forced redeployment preserved permanent authentication, service configuration,
+  repository/frontend settings and a private artifact.
+- Separate application and state backups created under a mode-0700 parent while
+  service was stopped. The SQLite state copy passed PRAGMA quick_check.
+- 18 automated tests passed: python3 -m unittest discover -s tests -v.
+  Fault injection covers download/hash/stop failures, backup-directory/application/
+  state failures, replacement/start/health failures, and each bootstrap API step
+  plus restart/auth verification failures. These are isolated unit tests, not a
+  claim of real cross-version database migration/rollback validation.
+- Existing upstream PR was already closed; standalone changes do not create,
+  reopen, update or push an upstream contribution branch.

@@ -16,20 +16,19 @@ Unattended example (uses Core's app defaults and DHCP; adapt to your host):
 Access and first login
 
   Dashboard: http://<container-ip>:<configured-port> (default 8080)
-  Initial manager token name: admin (customizable)
-  Read its random secret from /etc/conf.d/reposilite inside the container:
+  Manager token name: admin (customizable)
+  Installation creates a persistent manager token, verifies it, removes the
+  temporary startup token and verifies login again after a service restart.
+  Read admin_user and admin_secret in the root-only service configuration:
 
     pct exec <CTID> -- cat /etc/conf.d/reposilite
 
-  The initial token is temporary in Reposilite's terminology: the service
-  recreates it from bootstrap_secret on each start. For a permanent manager
-  token, run this in Dashboard > Console:
-
-    token-generate administrator m
-
-  Save the resulting secret, clear bootstrap_secret in /etc/conf.d/reposilite,
-  then run rc-service reposilite restart. The permanent token remains in SQLite.
+  The service starts without a token secret in its process arguments after
+  installation. Tokens are stored as hashes in SQLite. The config retains the
+  initial plaintext secret for first login; keep it private. If you rotate the
+  token in the dashboard, update your saved credentials accordingly.
   Use HTTPS through your reverse proxy when accessing from untrusted networks.
+  Older installations retain their existing bootstrap-token setup on update.
 
 Updates and data
 
@@ -40,22 +39,33 @@ Updates and data
   Services and tokens use /etc/conf.d/reposilite. Console logs are in
   /var/log/reposilite; Reposilite also writes logs in its working directory.
 
-  Each update saves the previous JAR and version marker under
-  /opt/reposilite-backups/<timestamp>. This is not a complete data backup.
-  Use Proxmox backups for repositories and database. If startup fails after an
-  update, the old JAR is restored and the service stays stopped; inspect logs
-  and database compatibility before manually restarting it.
+  An exclusive lock prevents concurrent updates. Downloads are verified before
+  stopping the service. After a clean stop, a root-only backup is created under
+  /opt/reposilite-backups/<timestamp>-<pid>/ with separate application/ and state/
+  folders. State includes service configuration, local configuration and the
+  default SQLite database plus any WAL/SHM files. Artifact repositories and
+  custom/external databases still require your own backups.
 
-Community Scripts generator and contribution
+  A backup failure restarts the unchanged application where possible. A failed
+  replacement, service start or HTTP health check restores the previous JAR and
+  version marker and leaves the service stopped. The state backup is retained;
+  the live database is not overwritten automatically because the new release
+  might have migrated it. Inspect /var/log/reposilite before recovery.
 
-  https://community-scripts.org/generator generates commands for scripts already
-  present in its catalog. This script follows the same Core lifecycle and has
-  json/reposilite.json for catalog integration. The public repository can
-  be used directly before official review and promotion.
-  Official listing is subject to the Community Scripts maintainers' review.
+  To restore state after deciding which application version to run, stop the
+  service and copy the required files from state/files/<original-absolute-path>
+  back to that original path, preserving ownership/permissions. For example,
+  the service configuration is at state/files/etc/conf.d/reposilite. A full
+  Proxmox backup remains the recovery path for repositories and external data.
+
+Community Scripts Core compatibility
+
+  This standalone distribution uses the Community Scripts Core lifecycle and
+  includes json/reposilite.json with application-variable metadata. No upstream
+  PR is active. The official generator lists catalogued scripts; the commands
+  in this repository work directly.
   Earlier alpine-reposilite install URLs redirect to the reposilite script;
   existing configuration is preserved.
-  Contribution PR: https://github.com/community-scripts/DevScripts/pull/2489
 
   Source files:
     ct/reposilite.sh
@@ -83,13 +93,13 @@ Application settings
   var_dashboard_description   Public Maven repository hosted through Reposilite
   var_repositories_json       unset (optional advanced override)
 
-  Repository names are comma separated, without spaces. Use - for an empty
+  Repository names are comma separated; surrounding whitespace is ignored. Use - for an empty
   public/private list. IDs must be unique across both lists. The quota is the
   maximum percentage of available filesystem space per repository; it does
   not reserve capacity or sum to a combined quota. Use yes/no for switches.
   var_data_dir accepts a path below /var/lib or /srv containing letters,
   digits, slashes, underscores and hyphens. It is separate from the JAR path.
-  Adjust the container RAM to leave headroom above var_java_heap.
+  The installer requires at least 128 MiB of container RAM above var_java_heap.
 
   Example (add your host-specific storage/network choices):
 
