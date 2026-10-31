@@ -11,7 +11,7 @@ SETTINGS = CT.split("\nstart\n", 1)[1].split("\nbuild_container\n", 1)[0]
 HARNESS = """
 msg_error() { echo "$*" >&2; }
 ensure_dependencies() { command -v jq >/dev/null; }
-prompt_confirm() { return 0; }
+prompt_confirm() { [[ "$1" == "Customize Reposilite application settings?" ]]; }
 prompt_input() { printf '%s' "${2}"; }
 """ + SETTINGS + "\nenv -0\n"
 
@@ -19,6 +19,7 @@ prompt_input() { printf '%s' "${2}"; }
 class SettingsTests(unittest.TestCase):
     def run_settings(self, **values):
         environment = {k: v for k, v in os.environ.items() if not k.startswith("var_")}
+        environment["COMMUNITY_SCRIPTS_ROOT"] = str(ROOT)
         environment.update(values)
         result = subprocess.run(["bash", "-c", HARNESS], env=environment, capture_output=True)
         exported = {}

@@ -1,0 +1,41 @@
+{
+  "database": {
+    "type": "mariadb",
+    "host": "db.example.com",
+    "port": 3306,
+    "name": "reposilite",
+    "user": "reposilite",
+    "password": "REPLACE_ME",
+    "parameters": {"sslMode": "verify-full"}
+  },
+  "storage": {
+    "type": "s3",
+    "endpoint": "https://s3.example.com",
+    "bucketName": "maven-artifacts",
+    "region": "us-east-1",
+    "accessKey": "REPLACE_ME",
+    "secretKey": "REPLACE_ME",
+    "prefix": "reposilite",
+    "signer": "DEFAULT",
+    "pathStyle": true,
+    "skipBucketCreation": true
+  },
+  "ldap": {
+    "enabled": true,
+    "ssl": true,
+    "hostname": "ldap.example.com",
+    "port": 636,
+    "baseDn": "ou=people,dc=example,dc=com",
+    "searchUserDn": "cn=reposilite,ou=service,dc=example,dc=com",
+    "searchUserPassword": "REPLACE_ME",
+    "typeAttribute": "person",
+    "userAttribute": "uid",
+    "userFilter": "(memberOf=cn=maven,ou=groups,dc=example,dc=com)",
+    "userType": "TEMPORARY"
+  },
+  "tls": {
+    "mode": "self-signed",
+    "hostname": "maven.example.com",
+    "port": 443
+  }
+}

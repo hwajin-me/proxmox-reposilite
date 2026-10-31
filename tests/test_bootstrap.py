@@ -28,7 +28,7 @@ curl() {
   count=$((count + 1))
   echo "$count" >"$FIXTURE/calls"
   [[ "${FAULT:-}" != "$count" ]] || return 1
-  [[ "${FAULT:-}" != verify || "$count" -lt 7 ]] || return 1
+  [[ "${FAULT:-}" != verify || "$count" -lt 9 ]] || return 1
   output=""
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == -o ]]; then output="$2"; shift; fi
@@ -38,7 +38,8 @@ curl() {
     case "$count" in
       1) echo '{"repositories":[]}' >"$output" ;;
       3) echo '{"title":"Original","description":"Original"}' >"$output" ;;
-      6) echo '{"permissions":[{"identifier":"access-token:manager"}]}' >"$output" ;;
+      5) echo '{"ldap":{"enabled":false}}' >"$output" ;;
+      8) echo '{"permissions":[{"identifier":"access-token:manager"}]}' >"$output" ;;
     esac
   fi
 }
@@ -55,8 +56,10 @@ class BootstrapTests(unittest.TestCase):
         for name in ["bootstrap-auth", "admin-auth", "create-manager"]:
             (private / name).write_text("sensitive fixture")
         (root / "calls").write_text("0")
+        (root / "storage.json").write_text('{"provider":{"type":"fs","mount":"","quota":"100%"},"root":""}')
+        (root / "ldap.json").write_text('{}')
         (root / "config").write_text('bootstrap_secret="temporary"\nadmin_secret="persistent"\n')
-        seed = SEED.replace("/etc/conf.d/reposilite", str(root / "config"))
+        seed = SEED.replace("/etc/conf.d/reposilite", str(root / "config")).replace("/etc/reposilite", str(root))
         result = subprocess.run(["bash", "-c", STUBS + "\n" + seed], capture_output=True, text=True, env={
             **os.environ, "FAULT": fault, "FIXTURE": str(root), "STD": "",
             "BOOTSTRAP_DIR": str(private), "AUTH_FILE": str(private / "bootstrap-auth"),
@@ -67,7 +70,7 @@ class BootstrapTests(unittest.TestCase):
         return root, result
 
     def test_every_failed_api_step_removes_private_files_and_stops_service(self):
-        for count in range(1, 7):
+        for count in range(1, 9):
             with self.subTest(step=count):
                 root, result = self.run_seed(str(count))
                 self.assertNotEqual(result.returncode, 0)

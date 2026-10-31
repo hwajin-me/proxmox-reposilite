@@ -46,7 +46,7 @@
     },
     {
       "type": "warning",
-      "text": "The dashboard uses HTTP (default port 8080). Configure HTTPS with your reverse proxy before exposing it outside a trusted network."
+      "text": "Optional native HTTPS supports supplied PEM certificates or self-signed certificates. LDAP/LDAPS, SQL and S3 connections can be configured during Advanced Settings. No reverse proxy is installed."
     }
   ],
   "app_vars": [
@@ -124,7 +124,14 @@
       "name": "var_repositories_json",
       "label": "Advanced repository definitions (JSON)",
       "type": "text",
-      "help": "Optional Reposilite repositories array. Overrides repository names, quotas and switches. Requires unique IDs, visibility and fs storageProvider; accepts per-repository mount/proxied settings."
+      "help": "Optional native Reposilite repositories array with fs or s3 storage. Overrides the profile storage and repository defaults."
+    },
+    {
+      "name": "var_integrations_json",
+      "label": "Database, storage, LDAP and native TLS profile",
+      "type": "text",
+      "default": "{}",
+      "help": "Optional JSON profile. Advanced Settings offers a guided TTY setup. For secrets, prefer var_integrations_file pointing to a mode-600 JSON file on the Proxmox host. See examples/integrations.json."
     }
   ]
 }

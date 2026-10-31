@@ -83,6 +83,7 @@ function update_script() {
     fi
     BACKUP_DIR="$BACKUP_ROOT/state"
     STATE_PATHS=(/etc/conf.d/reposilite)
+    [[ ! -d /etc/reposilite ]] || STATE_PATHS+=(/etc/reposilite)
     for STATE_FILE in configuration.cdn reposilite.db reposilite.db-wal reposilite.db-shm; do
       [[ ! -f "${data_directory:-/var/lib/reposilite}/$STATE_FILE" ]] || STATE_PATHS+=("${data_directory:-/var/lib/reposilite}/$STATE_FILE")
     done
@@ -96,7 +97,13 @@ function update_script() {
     READY=no
     if mv /opt/reposilite/reposilite.jar.new /opt/reposilite/reposilite.jar && $STD rc-service reposilite start; then
       for ((i=0; i<60; i++)); do
-        if curl -fsS --max-time 2 "http://127.0.0.1:${http_port:-8080}/" >/dev/null 2>&1; then READY=yes; break; fi
+        HEALTH_URL="http://127.0.0.1:${http_port:-8080}/"
+        HEALTH_ARGS=()
+        if [[ "${tls_enabled:-no}" == yes ]]; then
+          HEALTH_URL="https://${tls_host}:${tls_port}/"
+          HEALTH_ARGS=(--cacert /etc/reposilite/tls/certificate.pem --resolve "${tls_host}:${tls_port}:127.0.0.1" --noproxy '*')
+        fi
+        if curl -fsS --max-time 2 "${HEALTH_ARGS[@]}" "$HEALTH_URL" >/dev/null 2>&1; then READY=yes; break; fi
         sleep 2
       done
     fi
@@ -117,6 +124,7 @@ EOF
 }
 
 start
+_integrations_interactive=no
 if [[ "${METHOD:-}" == advanced ]] && MODE=advanced prompt_confirm "Customize Reposilite application settings?" "n" 60; then
   _settings=(
     'var_port|HTTP port|8080'
@@ -135,6 +143,9 @@ if [[ "${METHOD:-}" == advanced ]] && MODE=advanced prompt_confirm "Customize Re
     IFS='|' read -r _key _label _default <<<"$_setting"
     [[ -n "${!_key:-}" ]] || printf -v "$_key" '%s' "$(MODE=advanced prompt_input "$_label" "$_default" 60)"
   done
+  if [[ -z "${var_integrations_json:-}${var_integrations_file:-}" ]] && MODE=advanced prompt_confirm "Configure database, external storage, LDAP and native TLS?" "n" 60; then
+    _integrations_interactive=yes
+  fi
 fi
 export var_port="${var_port:-8080}"
 export var_data_dir="${var_data_dir:-/var/lib/reposilite}"
@@ -148,6 +159,26 @@ export var_preserve_snapshots="${var_preserve_snapshots:-no}"
 export var_dashboard_title="${var_dashboard_title:-Reposilite Repository}"
 export var_dashboard_description="${var_dashboard_description:-Public Maven repository hosted through Reposilite}"
 export var_repositories_json="${var_repositories_json:-}"
+export var_integrations_json="${var_integrations_json:-}"
+[[ -n "$var_integrations_json" ]] || var_integrations_json='{}'
+if [[ "$_integrations_interactive" == yes || -n "${var_integrations_file:-}" || "$var_integrations_json" != '{}' ]]; then
+  ensure_dependencies python3
+  _helper="${COMMUNITY_SCRIPTS_ROOT:-}/misc/reposilite-config.py"
+  _helper_temp=""
+  if [[ ! -f "$_helper" ]]; then
+    _helper_temp="$(mktemp)"
+    _helper="$_helper_temp"
+    curl -fsSL "${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}/misc/reposilite-config.py" -o "$_helper" || { rm -f "$_helper_temp"; exit 1; }
+  fi
+  _args=(validate)
+  [[ "$_integrations_interactive" != yes ]] || _args=(interactive)
+  [[ -z "${var_integrations_file:-}" ]] || _args+=(--file "$var_integrations_file")
+  if ! var_integrations_json="$(python3 "$_helper" "${_args[@]}")"; then
+    [[ -z "$_helper_temp" ]] || rm -f "$_helper_temp"
+    exit 1
+  fi
+  [[ -z "$_helper_temp" ]] || rm -f "$_helper_temp"
+fi
 [[ "$var_public_repositories" != *$'\n'* && "$var_private_repositories" != *$'\n'* ]] || { msg_error "Repository lists must be on one line"; exit 1; }
 var_public_repositories="$(printf '%s' "$var_public_repositories" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]]*,[[:space:]]*/,/g')"
 var_private_repositories="$(printf '%s' "$var_private_repositories" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]]*,[[:space:]]*/,/g')"
@@ -165,13 +196,18 @@ ensure_dependencies jq
 if [[ -n "$var_repositories_json" ]]; then
   jq -e 'type == "array" and length > 0 and all(.[];
     type == "object" and (.id | type == "string" and test("^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")) and
-    (.visibility == "PUBLIC" or .visibility == "PRIVATE") and .storageProvider.type == "fs" and
-    (.storageProvider.quota | type == "string" and length > 0) and
-    (if (.storageProvider | has("mount")) then (.storageProvider.mount | type == "string") else true end) and
+    (.visibility == "PUBLIC" or .visibility == "PRIVATE") and
+    (if .storageProvider.type == "fs" then
+      (.storageProvider.quota | type == "string" and length > 0) and
+      (if (.storageProvider | has("mount")) then (.storageProvider.mount | type == "string") else true end)
+    elif .storageProvider.type == "s3" then
+      (.storageProvider | all(.bucketName, .region, .accessKey, .secretKey; type == "string" and length > 0)) and
+      (if (.storageProvider | has("sharedBucket")) then (.storageProvider.sharedBucket | type == "boolean") else true end)
+    else false end) and
     (if has("redeployment") then (.redeployment | type == "boolean") else true end) and
     (if has("preserveSnapshots") then (.preserveSnapshots | type == "boolean") else true end) and
     (if has("proxied") then (.proxied | type == "array") else true end)) and
-    ((map(.id) | unique | length) == length)' <<<"$var_repositories_json" >/dev/null || { msg_error "Invalid repository JSON: check unique IDs, visibility, fs quota/mount, boolean switches and proxy arrays"; exit 1; }
+    ((map(.id) | unique | length) == length)' <<<"$var_repositories_json" >/dev/null || { msg_error "Invalid repository JSON: check unique IDs, visibility, fs/s3 storage and field types"; exit 1; }
 else
   _repository_ids=()
   for _list in "$var_public_repositories" "$var_private_repositories"; do
@@ -190,4 +226,7 @@ build_container
 description
 msg_ok "Reposilite installation completed"
 echo -e "${INFO}${YW}URL: http://${IP}:${var_port}${CL}"
+if [[ "$(jq -r '.tls.mode // "off"' <<<"$var_integrations_json")" != off ]]; then
+  echo -e "${INFO}${YW}HTTPS: $(jq -r '"https://" + .tls.hostname + ":" + ((.tls.port // 443)|tostring)' <<<"$var_integrations_json")${CL}"
+fi
 echo -e "${INFO}${YW}Manager token: ${var_admin_user}. Read admin_secret in /etc/conf.d/reposilite inside the container.${CL}"
