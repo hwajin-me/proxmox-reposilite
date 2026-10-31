@@ -53,6 +53,7 @@ Community Scripts generator and contribution
   json/alpine-reposilite.json for catalog integration. The public repository can
   be used directly before official review and promotion.
   Official listing is subject to the Community Scripts maintainers' review.
+  Contribution PR: https://github.com/community-scripts/DevScripts/pull/2489
 
   Source files:
     ct/alpine-reposilite.sh
