@@ -41,6 +41,18 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(DB["password"], (root / "etc/reposilite/runtime.conf").read_text())
 
+    def test_render_rejects_symlink_aliases_and_private_configuration_mounts(self):
+        for target in ("private", "../../../../etc/reposilite"):
+            with self.subTest(target=target):
+                root = self.root()
+                base = root / "var/lib/reposilite/repositories"
+                base.mkdir(parents=True)
+                (base / "private").mkdir()
+                (root / "etc/reposilite").mkdir(parents=True)
+                (base / "releases").symlink_to(target)
+                with self.assertRaisesRegex(CONFIG.ProfileError, "Filesystem"):
+                    CONFIG.render({}, root)
+
     def test_other_jdbc_drivers_encode_credentials(self):
         for dialect in ("mysql", "postgresql"):
             root = self.root()

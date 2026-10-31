@@ -1,0 +1,155 @@
+Proposed title: New Script: reposilite (Alpine LXC)
+Intended target: community-scripts/DevScripts:main
+Status: prepared text only. This preparation created no PR, issue, upstream branch or review request.
+This is a draft for maintainer review, not a claim of submission readiness.
+
+PR body
+
+## ✍️ Description
+
+Add reposilite, a Maven repository manager, as an unprivileged Alpine LXC
+application running directly on Java 21 with OpenRC. Defaults are Alpine 3.24,
+1 CPU, 1024 MiB RAM, 8 GiB disk and HTTP port 8080.
+
+The Core wizard accepts repository names/visibility, quota, redeployment policy,
+heap, data directory, manager name and dashboard text. Optional native profiles
+configure MariaDB/MySQL/PostgreSQL, S3-compatible artifact storage, mounted
+filesystem storage, LDAP/LDAPS and HTTPS with provided or self-signed PEM files.
+Passwords use hidden TTY entry or a private host-side JSON file. No reverse
+proxy, OIDC gateway, Docker runtime or ACME service is installed.
+
+A persistent manager token replaces the temporary startup token. Private files
+use restrictive permissions, LDAP excludes the initial local manager, and
+repository mounts/namespaces are checked for overlap. An external database must
+be dedicated and empty; tables, views and partitioned relations are refused
+before application initialization.
+
+Updates use Core release discovery and the publisher's Maven SHA256, retain
+configuration/data, back up application and local state after a clean stop, and
+authenticate a listing of each repository. Replacement/start/readiness failure
+restores the previous application and leaves it stopped for database review.
+The live database is never automatically rolled back across a possible migration.
+
+Proposed application files:
+- ct/reposilite.sh
+- install/reposilite-install.sh
+- json/reposilite.json
+- misc/reposilite-config.py
+- misc/DatabasePreflight.java
+
+The legacy standalone ct/alpine-reposilite.sh redirect is not proposed as a new
+upstream application. Standalone CI/tests/docs should be packaged separately
+from the application files according to maintainer guidance.
+
+## 🔗 Related PR / Issue
+
+No open upstream PR or issue is claimed. Standalone implementation:
+https://github.com/hwajin-me/proxmox-reposilite
+
+## ✅ Prerequisites
+
+- [x] Implementation self-review and regression checks completed.
+- [ ] Current revision verified end-to-end on the actual Proxmox target.
+- [ ] Standalone source-root/naming/helper exceptions resolved for upstream.
+- [x] No production credentials or host-specific configuration committed.
+
+## 🏗️ arm64 Support
+
+- [ ] **arm64 supported**
+- [x] **arm64 not tested**
+- [ ] **arm64 not supported**
+
+var_arm64 remains unset, so Core asks before an unverified ARM64 attempt.
+The metadata deliberately omits architectures, matching that Core state.
+
+## 🖥️ Tested on
+
+- [ ] Proxmox VE: current complete revision, fresh install/reboot/update/recovery.
+- [ ] Incus: current complete revision.
+
+Earlier baseline revisions were installed, rebooted and redeployed on Proxmox
+VE 9.1.6/amd64. Those results are historical and do not check either box above.
+Current evidence includes 50 automated tests, actual Reposilite 3.6.5/JDK 21
+checks, filesystem isolation tests, and MariaDB/PostgreSQL JDBC checks. Earlier
+Alpine Docker/OpenRC harness evidence is detailed in TESTING.txt; Docker was a
+test fixture only. A full current PVE run remains pending because the supplied
+host is unreachable. ARM64, Incus and cross-version migrations remain untested.
+
+## 🛠️ Type of Change
+
+- [x] 🆕 **New script** — new Alpine application integration.
+- [x] Application customization and update safeguards.
+- [x] Website metadata and documentation.
+
+## 🔍 Code & Security Review
+
+- [x] CT/install/JSON responsibilities are separated; Core owns host operations.
+- [x] Application inputs are exported and have matching metadata.
+- [x] **No Docker / Docker Compose** — Java/OpenRC run directly in the LXC.
+- [x] **No git pull** — Core release helpers and verified Maven JAR downloads.
+- [x] Configuration, credentials, logs and SQLite state have private permissions.
+- [x] FS/S3 namespace conflicts and unsafe filesystem mounts are rejected.
+- [ ] All strict upstream conventions and ct-base checks satisfied; see below.
+
+## 🤖 AI Assistance
+
+- [ ] **No AI used**
+- [x] **AI was used** — implementation, audit, tests and this draft used Codex.
+
+Please describe to which degree, if any, an LLM was used:
+
+OpenAI Codex (GPT-6 family) assisted with implementation, parallel code review,
+regression tests, runtime fixtures and documentation. The exact model identifier
+and configured reasoning effort were not exposed in this session; the author
+should record the client settings before submission. Official AGENTS.md,
+pve-script-creator.agent.md, Core source and contribution docs were consulted.
+This draft records the remaining deviations and does not claim a human author
+review or full target-platform validation has already happened.
+
+## 📋 Additional Information
+
+Review decisions still needed:
+- Keep the requested reposilite slug or agree on the upstream alpine- convention.
+- Change _CS_DEFAULT_URL to DevScripts in a future upstream branch. It currently
+  points to the standalone repository intentionally; official ct-base fails as-is.
+- Agree on packaging the configuration and JDBC preflight helpers.
+- Review the Maven JAR exception: GitHub releases have no binary assets, and the
+  generic URL deployment helper does not preserve the executable JAR as required.
+  Current code preserves the executable JAR and verifies its official Maven checksum.
+- Native self-signed TLS uses Python/OpenSSL because the actual Alpine helper
+  does not expose create_self_signed_cert. No nginx workaround is proposed.
+- Complete current Proxmox installation, native integrations, reboot, update and
+  failure-recovery validation, then have the author review these declarations.
+
+Upstream 3.6.5 Dockerfile, docker-compose.yml and .env were inspected. They use
+Java 21, port 8080, a persistent data volume and Java/application options. This
+integration installs the published executable JAR instead of building the image.
+MySQL/PostgreSQL retain upstream's experimental status. No OIDC setting exists
+in the verified native configuration. Mounted NFS/SMB needs host/LXC provisioning.
+
+## 📦 Application Requirements (for new scripts)
+
+- [x] The application is **at least 6 months old**
+- [x] The application is **actively maintained**
+- [x] The application has **600+ GitHub stars**
+- [x] Official **release tarballs** are published
+- [x] I understand that not all scripts will be accepted due to various reasons and criteria by the community-scripts ORG
+
+Evidence checked on 2026-10-31: GitHub reports creation on 2017-07-06,
+1,898 stars, and release 3.6.5 published on 2026-10-27. The release supplies an
+official source tarball and links to Maven-hosted binaries; GitHub assets are
+empty. Eligibility does not guarantee acceptance of the implementation choices.
+
+## 🌐 Source
+
+https://reposilite.com/guide/general
+https://reposilite.com/guide/ldap
+https://github.com/dzikoysk/reposilite/releases/tag/3.6.5
+https://api.github.com/repos/dzikoysk/reposilite/tarball/3.6.5
+https://maven.reposilite.com/releases/com/reposilite/reposilite/3.6.5/
+https://github.com/hwajin-me/proxmox-reposilite/actions/workflows/check.yml
+
+Prepared against the MIT-licensed DevScripts template and authoring guidance:
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/.github/pull_request_template.md
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/AGENTS.md
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/.github/agents/pve-script-creator.agent.md

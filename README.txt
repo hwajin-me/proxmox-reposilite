@@ -122,7 +122,9 @@ Application settings
     [{"id":"stable","visibility":"PUBLIC","storageProvider":{"type":"fs","quota":"60%","mount":""},"redeployment":false,"preserveSnapshots":false,"proxied":[]},{"id":"internal","visibility":"PRIVATE","storageProvider":{"type":"fs","quota":"20%","mount":""},"redeployment":true,"preserveSnapshots":true,"proxied":[]}]
 
   This allows per-repository quotas and mounts in Reposilite's native format.
-  Filesystem quota overrides accept 1-100% or positive sizes such as 500MB.
+  Filesystem quota overrides accept 1-100%, positive byte counts, or KB/MB/GB
+  sizes such as 500MB. B/TB suffixes are unsupported by Reposilite 3.6.5.
+  Values exceeding the signed 64-bit byte limit are rejected.
   Validation rejects overlapping S3 namespaces and malformed provider settings
   before creating a container. The API validates the remaining schema at installation;
   ensure custom mount paths are writable. Avoid putting secrets in a shared
@@ -130,6 +132,16 @@ Application settings
   the manager API. They remain editable in the dashboard and are not reapplied
   by update. Changing the original var_* inputs later does not reconfigure an
   existing installation; use the dashboard or edit /etc/conf.d/reposilite.
+
+  Filesystem repositories must use separate, non-overlapping directories.
+  Relative mounts stay below <data_directory>/repositories; absolute mounts
+  must be repository subdirectories or dedicated directories under /srv or
+  /mnt, separate from private application data. Installation checks normalized
+  paths and symlink targets in the container, including default repository paths.
+  Never map a public and private repository to the same directory or nested
+  directories. Existing mounts are not migrated; keep this rule when editing
+  settings in the dashboard too. Bind-mount aliases and aliases of remote S3
+  endpoints may refer to the same storage despite having different paths/URLs.
 
 Native DB, external storage, LDAP and TLS
 
@@ -164,8 +176,9 @@ Native DB, external storage, LDAP and TLS
     External databases require independent, consistent backups before update.
     Use a dedicated, empty database on first install: settings are seeded once.
     Before starting Reposilite, a Java 21/JDBC metadata check verifies the
-    connection and refuses existing user tables. The database account must be
-    able to enumerate all tables. This check does not create tables or adopt an
+    connection and refuses existing user relations, including tables, partitioned
+    tables, views and materialized views. The database account must be able to
+    enumerate all relations. This check does not create tables or adopt an
     existing Reposilite database. Connection details and errors are kept private.
     For PostgreSQL with trustedCertificates, the renderer selects the JVM SSL
     factory so those CAs are used, unless sslfactory/sslrootcert is explicit.
@@ -250,7 +263,9 @@ Native DB, external storage, LDAP and TLS
   are shell-escaped. Application configuration code disables shell tracing.
 
   ARM64 and Incus are not tested. Core asks before attempting unverified ARM64.
-  See TESTING.txt for validation scope and AUDIT.txt for the contribution review.
+  See TESTING.txt for validation scope, AUDIT.txt and COMPATIBILITY.txt for the
+  reviews, and PR-DRAFT.txt for the prepared submission text. This preparation
+  did not create or update a PR.
 
 Sources
   https://reposilite.com/guide/general

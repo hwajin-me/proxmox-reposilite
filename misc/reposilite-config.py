@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shlex
 import subprocess
@@ -74,10 +75,44 @@ def ldap_filter(value):
     require(value.startswith("(") and value.endswith(")") and depth == 0, "LDAP filter must contain one balanced filter")
 
 
-def validate_repositories(repositories):
+def filesystem_location(name, mount, root=None):
+    def canonical(path):
+        path = posixpath.normpath(path)
+        if root is None:
+            return path
+        anchor = root.resolve()
+        try:
+            resolved = (anchor / path.lstrip("/")).resolve()
+        except (OSError, RuntimeError):
+            raise ProfileError("Could not resolve filesystem mount") from None
+        require(resolved == anchor or anchor in resolved.parents, "Filesystem mount escapes the container root")
+        return "/" if resolved == anchor else "/" + resolved.relative_to(anchor).as_posix()
+
+    data = canonical(os.environ.get("var_data_dir", "/var/lib/reposilite"))
+    base = posixpath.join(data, "repositories")
+    location = canonical(posixpath.join(base, mount or name))
+    internal = location.startswith(base + "/")
+    external = location.startswith(("/srv/", "/mnt/")) and not (
+        location == data or location.startswith(data + "/") or data.startswith(location + "/"))
+    require(internal or external, "Filesystem mounts must use repository subdirectories or separate artifact directories under /srv or /mnt")
+    return location
+
+
+def validate_quota(value):
+    require(isinstance(value, str), "Filesystem quota must be a string")
+    if re.fullmatch(r"(?:[1-9][0-9]?|100)%", value):
+        return
+    size = re.fullmatch(r"([1-9][0-9]*)(KB|MB|GB)?", value, re.IGNORECASE)
+    require(size is not None, "Invalid filesystem quota: use 1-100%, bytes, KB, MB or GB")
+    factor = {None: 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}[size.group(2).upper() if size.group(2) else None]
+    require(int(size.group(1)) <= (2 ** 63 - 1) // factor, "Filesystem quota exceeds the supported byte limit")
+
+
+def validate_repositories(repositories, root=None):
     require(isinstance(repositories, list) and repositories, "Repository JSON must be a nonempty array")
     ids = set()
     locations = []
+    filesystems = []
     for repository in repositories:
         require(isinstance(repository, dict), "Invalid repository definition")
         name = repository.get("id")
@@ -90,9 +125,12 @@ def validate_repositories(repositories):
         provider = repository.get("storageProvider")
         require(isinstance(provider, dict), "Missing repository storage provider")
         if provider.get("type") == "fs":
-            quota = provider.get("quota")
-            require(isinstance(quota, str) and bool(re.fullmatch(r"(?:[1-9][0-9]?%|100%|[1-9][0-9]*(?:B|KB|MB|GB|TB))", quota)), "Invalid filesystem quota: use 1-100% or a size such as 500MB")
-            text(provider.get("mount", ""), "Filesystem mount", empty=True)
+            validate_quota(provider.get("quota", "100%"))
+            mount = text(provider.get("mount", ""), "Filesystem mount", empty=True)
+            location = filesystem_location(name, mount, root)
+            for previous in filesystems:
+                require(location != previous and not location.startswith(previous + "/") and not previous.startswith(location + "/"), "Filesystem repository directories must not overlap")
+            filesystems.append(location)
         elif provider.get("type") == "s3":
             settings = {key: provider[key] for key in ("endpoint", "bucketName", "region", "accessKey", "secretKey", "prefix", "signer") if key in provider}
             validate({"storage": {"type": "s3", **settings}})
@@ -218,6 +256,20 @@ def write(path, content, mode=0o600):
 def render(profile, root):
     """Called before the first application start, after input validation."""
     validate(profile)
+    repositories = os.environ.get("var_repositories_json", "")
+    if repositories:
+        validate_repositories(json.loads(repositories), root)
+    elif profile.get("storage", {}).get("type", "fs") == "fs":
+        generated = []
+        storage_root = profile.get("storage", {}).get("root", "")
+        for visibility, names in (("PUBLIC", os.environ.get("var_public_repositories", "releases,snapshots")),
+                                  ("PRIVATE", os.environ.get("var_private_repositories", "private"))):
+            if names == "-":
+                continue
+            generated.extend({"id": name.strip(), "visibility": visibility, "storageProvider": {
+                "type": "fs", "mount": posixpath.join(storage_root, name.strip()) if storage_root else ""
+            }} for name in names.split(","))
+        validate_repositories(generated, root)
     etc = root / "etc/reposilite"
     etc.mkdir(parents=True, exist_ok=True, mode=0o700)
     etc.chmod(0o700)

@@ -58,6 +58,35 @@ Findings fixed
     Certificate validation now consistently reports the same sanitized profile
     error for either form, while keeping verification enabled.
 
+Second audit findings fixed (after a86112b)
+
+11. High: a public and private filesystem repository could share the same mount
+    or nested directories. With the real 3.6.5 JAR, a file uploaded privately
+    became anonymously readable through the public repository. Validation now
+    rejects normalized path overlaps, default-path aliases, unsafe parent/system
+    mounts and symlink aliases before application startup. Distinct mounts were
+    retested: private access returned 401, and the public path returned 404.
+    Dashboard edits and aliases of bind mounts still need administrator review.
+
+12. Medium: quota validation accepted B/TB suffixes that the upstream provider
+    cannot parse. It now matches supported percent/byte/KB/MB/GB formats, honours
+    an omitted default, and rejects signed 64-bit overflow before CT creation.
+
+13. Medium: TABLE-only JDBC metadata missed PostgreSQL partitioned tables,
+    views and materialized views. Case-insensitive schema exclusions also missed
+    user-created quoted uppercase schemas. The preflight examines all relation types
+    while excluding driver-marked system objects and reserved system schemas.
+    Real PostgreSQL and MariaDB tests confirm refusal without changing data.
+
+14. Medium: the updater treated all false Core release-check results as a
+    successful no-op. Current Core returns 1 for no update, but 6/22/250 for
+    failures. Only 1 is accepted now; other statuses reach the caller before
+    stopping the service. Invalid/duplicate repository IDs also fail early.
+
+15. Low: the CT profile-helper fetch used raw curl without Core retry handling.
+    It now uses curl_with_retry. A regression check verifies that a separate
+    script-source override is honoured and the temporary helper is removed.
+
 Community Scripts contracts checked
 
 - Current local-first Core bootstrap, independently overrideable script/Core
@@ -91,7 +120,7 @@ Standalone choices and future PR work
   experimental upstream; ARM64/Incus are not claimed tested.
 - Future PRs must follow the new-application DevScripts route, eligibility and
   AI-disclosure rules, and include truthful target-platform test evidence.
-- Current automated validation: 44 tests, including four actual-JAR JDBC checks.
+- Current automated validation: 50 tests, including five actual-JAR JDBC checks.
   Separate real MariaDB/PostgreSQL preflight tests passed for empty/populated DBs and
   invalid credentials, preserving existing data. A current default-SQLite
   Alpine Docker/OpenRC harness install also passed repository/permission checks.

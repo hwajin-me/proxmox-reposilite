@@ -121,6 +121,16 @@ class DatabasePreflightTests(unittest.TestCase):
         self.assertNotIn("SQLException", result.stderr)
         self.assertNotIn("at DatabasePreflight", result.stderr)
 
+    def test_existing_view_is_refused_without_modifying_it(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("CREATE VIEW private_existing_view AS SELECT 'preserve-me' AS value")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Database preflight failed", result.stderr)
+        with sqlite3.connect(self.database) as connection:
+            self.assertEqual(connection.execute("SELECT value FROM private_existing_view").fetchall(), [("preserve-me",)])
+
     def test_invalid_configuration_does_not_disclose_parser_input(self):
         secret = "PRIVATE_MALFORMED_CONFIGURATION"
         result = self.run_check(content='{"url": "' + secret)

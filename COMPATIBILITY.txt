@@ -1,0 +1,103 @@
+Community Scripts compatibility review — 2026-10-31
+
+Result: standalone Core integration is compatible with the checked contracts.
+This repository is not yet an upstream-ready DevScripts patch. This preparation
+created or updated no PR.
+
+Official snapshots reviewed
+DevScripts f7b1ed82c7b7be7cb91386b10ec581c74ed18554
+Core       5acac4483be88990354dd4e3778e2cdce4df428e
+
+Runtime contracts
+
+PASS  Current local-first core/build.func bootstrap; script and Core roots can
+      be overridden independently. No host commands or custom telemetry/traps.
+PASS  CT defaults and exported app_vars agree with json/reposilite.json.
+      Inputs are honoured before prompting; secret JSON fields are marked.
+PASS  Core prepared FUNCTIONS_FILE_PATH reaches the Alpine installer.
+PASS  setup_alpine/run_os_setup and update_alpine/run_os_update cover the one
+      supported OS family. OpenRC is used; no systemctl or containerized app.
+PASS  JAVA_VERSION=21 setup_java supplies a full JDK; native config uses only
+      Python's standard library, without pip/venv/application Python runtimes.
+PASS  start() loads tools.func on update, then the general Forge release helper.
+      The updater now distinguishes no-update 1 from errors such as 6/22/250.
+PASS  CT helper fetching now uses curl_with_retry with the script-source root.
+      A regression test checks remote-root selection and temporary-file cleanup.
+PASS  Standard lifecycle/messaging, existence checks, update exit, downloads,
+      backups and final motd_ssh/customize/cleanup_lxc calls are present.
+PASS  Shell syntax plus additional ShellCheck/shfmt gates, metadata/input checks
+      and 50 tests. JDBC compatibility tests use the verified official JAR.
+
+Generator and architecture
+
+PASS  The deployed generator honours the explicit install_methods[].script and
+      recognises resources.os=Alpine with method type=default. It can therefore
+      identify ct/reposilite.sh without changing the requested standalone slug.
+NOTE  The official generator chooses official application repositories. Adding
+      JSON here does not register this app in the official website's catalogue.
+PASS  var_arm64 is unset and architectures is omitted, matching the documented
+      unverified state. ARM64 is not claimed supported; metadata lists PVE only.
+GAP   Current full PVE and any Incus/ARM64 installation remain unverified.
+
+Intentional standalone differences / future upstream changes
+
+FAIL  Official ct-base requires a DevScripts _CS_DEFAULT_URL in every CT file.
+      Current primary CT points to this standalone repo; the old-slug file is a
+      redirect. Keep them functional here. For a future upstream branch, change
+      the primary source root and omit the historical standalone redirect.
+GAP   Alpine-only upstream naming normally uses alpine-. The requested reposilite
+      slug is retained and needs maintainer agreement before submission.
+GAP   Review placement/maintenance of misc/reposilite-config.py and the Java
+      preflight, plus which standalone tests/docs belong in an upstream patch.
+EXC   Reposilite publishes its executable JAR through Maven, not GitHub assets.
+      Core discovers releases and supplies download helpers; the original JAR
+      and its SHA256 are preserved. The generic URL deployment helper does not
+      preserve the executable JAR as required.
+EXC   Guidance prefers create_self_signed_cert. The generic system helper has
+      hostname/SAN support, but the actual Alpine installer helper does not
+      expose it. Native Python/OpenSSL TLS is retained without a reverse proxy.
+NOTE  ShellCheck/shfmt are extra standalone checks, not a claim that upstream
+      CI requires identical tooling. Its Bash syntax/layout contracts were read.
+
+Evidence and limits
+
+- Current Core DNS-failure status 6 was reproduced; updater tests exercise
+  1/6/22/250 with a running service and verify only 1 becomes success.
+- Native 3.6.5 filesystem overlap leakage was reproduced before the fix. After
+  rejection/isolated-mount changes, private upload stayed private (401) and the
+  corresponding public artifact path returned 404. Symlink aliases were tested.
+- Current JDBC preflight rejects PostgreSQL regular/partitioned tables, views
+  and materialized views without changing objects/data; an empty database still
+  passes. MariaDB empty/existing-table regression checks passed too.
+  Quoted uppercase user schemas cannot impersonate excluded system schemas.
+- Actual supported quota formats registered native providers. B/TB suffixes and
+  signed-long overflow are rejected before container creation.
+- Earlier PVE and Docker/OpenRC fixture results are historical, with exact scope
+  in TESTING.txt. The currently supplied PVE host remains unreachable.
+- Existing dashboard settings are preserved. The installer cannot guarantee
+  isolation after manual edits or detect every alias of mounted/remote storage.
+
+PR preparation
+
+PR-DRAFT.txt contains the title, description, change classification, architecture
+status, test evidence, AI disclosure, eligibility and unresolved author actions.
+Required template markers were checked against unmet-pr-close.yml locally.
+Passing a body-format check is not passing ct-base or proving runtime readiness.
+Unchecked platform/conformance items are intentional and must not be marked
+complete without the corresponding work. Exact model/effort settings and human
+author review must be recorded before an actual submission.
+
+Primary references
+
+https://community-scripts.org/docs/contribution/contributing
+https://community-scripts.org/docs/contribution/code-audit
+https://community-scripts.org/docs/ct/detailed_guide
+https://community-scripts.org/docs/install/detailed_guide
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/AGENTS.md
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/.github/workflows/ct-base.yml
+https://github.com/community-scripts/DevScripts/blob/f7b1ed82c7b7be7cb91386b10ec581c74ed18554/.github/workflows/unmet-pr-close.yml
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/ui/menu.func
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/lib/tools.func
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/lib/forge.func
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/lib/alpine.func
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/core/core.func

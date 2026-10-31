@@ -44,11 +44,16 @@ class DatabasePreflight {
         try (Connection connection = DriverManager.getConnection(url.textValue())) {
             DatabaseMetaData metadata = connection.getMetaData();
             try (ResultSet tables = metadata.getTables(
-                    connection.getCatalog(), null, "%", new String[] {"TABLE"})) {
+                    connection.getCatalog(), null, "%", null)) {
                 while (tables.next()) {
                     String schema = tables.getString("TABLE_SCHEM");
-                    if (!"pg_catalog".equalsIgnoreCase(schema)
-                            && !"information_schema".equalsIgnoreCase(schema)) {
+                    String type = tables.getString("TABLE_TYPE");
+                    boolean system = type != null
+                        && type.toUpperCase(java.util.Locale.ROOT).startsWith("SYSTEM ");
+                    // PostgreSQL reserves lowercase pg_; quoted uppercase names
+                    // can belong to the user and must not bypass this check.
+                    if (!system && !"information_schema".equals(schema)
+                            && (schema == null || !schema.startsWith("pg_"))) {
                         throw new IllegalStateException();
                     }
                 }

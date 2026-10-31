@@ -61,7 +61,10 @@ function update_alpine() {
   UPDATE_AUTH="user = $(printf '%s:%s' "${admin_user:-admin}" "$UPDATE_SECRET" | jq -Rs .)"
   unset UPDATE_SECRET
   if ! EXPECTED_REPOSITORIES="$(curl -fsS "${HEALTH_ARGS[@]}" --config - \
-    "${HEALTH_URL%/}/api/settings/domain/maven" <<<"$UPDATE_AUTH" | jq -ce '.repositories | map(.id) | sort')" || [[ -z "$EXPECTED_REPOSITORIES" ]]; then
+    "${HEALTH_URL%/}/api/settings/domain/maven" <<<"$UPDATE_AUTH" | jq -ce '
+      .repositories | select(type == "array") | map(.id) |
+      if all(.[]; type == "string" and length > 0) and (unique | length) == length
+      then sort else error("Invalid repository IDs") end')" || [[ -z "$EXPECTED_REPOSITORIES" ]]; then
     msg_error "Reposilite manager authentication/settings check failed; update saved credentials before retrying"
     exit 1
   fi
@@ -165,6 +168,12 @@ function update_alpine() {
 ${RELEASE}
 EOF
     msg_ok "Updated Reposilite to ${RELEASE}; backup: ${BACKUP_ROOT}"
+  else
+    UPDATE_CHECK_STATUS=$?
+    if [[ "$UPDATE_CHECK_STATUS" -ne 1 ]]; then
+      msg_error "Reposilite release lookup failed; the running service is unchanged"
+      exit "$UPDATE_CHECK_STATUS"
+    fi
   fi
   exit 0
 }
@@ -228,7 +237,7 @@ if [[ "$_integrations_interactive" == yes || -n "$var_integrations_file" || "$va
   if [[ ! -f "$_helper" ]]; then
     _helper_temp="$(mktemp)"
     _helper="$_helper_temp"
-    curl -fsSL "${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}/misc/reposilite-config.py" -o "$_helper" || {
+    curl_with_retry "${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}/misc/reposilite-config.py" "$_helper" || {
       rm -f "$_helper_temp"
       exit 1
     }

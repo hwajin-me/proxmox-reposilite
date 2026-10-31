@@ -152,7 +152,7 @@ Reproduce the complete suite from this directory:
 
   REPOSILITE_TEST_JAR=/absolute/path/reposilite-3.6.5-all.jar REPOSILITE_TEST_JAVA=/absolute/path/jdk-21/bin/java python3 -m unittest discover -s tests -v
 
-Without REPOSILITE_TEST_JAR the four optional JDBC checks are skipped. CI
+Without REPOSILITE_TEST_JAR the five optional JDBC checks are skipped. CI
 downloads the official fixture and verifies its publisher-provided SHA256.
 Local TLS tests require OpenSSL 3, as installed in Alpine; macOS's bundled
 LibreSSL does not provide the required hostname-check options. On Homebrew,
@@ -164,3 +164,33 @@ results above remain historical evidence for those revisions, not proof of a
 fresh full-stack installation of the current revision. Live external SQL,
 LDAP/S3/TLS, reboot, update and failure recovery need a new LXC validation run
 before an upstream PR can claim those paths. No upstream PR was submitted.
+
+Second implementation/Core audit (after a86112b, 2026-10-31):
+- 50 tests passed with the actual 3.6.5 JAR/Java 21, including five optional JDBC
+  tests. New cases cover views, FS overlap/default/parent aliases, symlink paths,
+  native quota syntax/overflow, Core error statuses and remote helper source roots.
+- Real JAR reproduction confirmed that sharing FS mounts leaked a privately
+  uploaded file through a PUBLIC repository. The fixed validator refuses those
+  profiles. Distinct paths were checked with actual private upload: anonymous
+  private access 401, the corresponding public path 404, both root listings 200.
+- Host validation and in-container/render validation reject same/nested paths,
+  default-directory aliases, private data/system paths and unsafe symlinks.
+  Distinct relative and /srv or /mnt paths and legitimate external symlinks pass.
+- Native provider registration passed for 1024 bytes, 1KB, 1MB and 1GB. B/TB
+  suffixes and values overflowing a signed long are rejected before creation.
+- PostgreSQL 17.6 fixture: empty DB accepted; regular/partitioned tables, views
+  and materialized views refused with objects/data unchanged. MariaDB 11.8 empty
+  and populated-table cases passed again. System objects remain ignored.
+  Quoted uppercase user schemas were also tested: the old checker accepted a
+  table in "INFORMATION_SCHEMA"; the fixed checker refuses it and preserves data.
+- Current official Core's actual update loader uses the general Forge helper.
+  Its DNS-failure return 6 was reproduced. Tests verify no-update 1 is success
+  while 6/22/250 stay errors without stopping the running application.
+- Shell tests now enable errexit/pipefail, matching Core's relevant behavior.
+- The PR text was checked against current official required body markers; the
+  standalone CT source roots intentionally fail upstream ct-base expectations.
+  No actual PR was opened, reopened, updated or submitted.
+
+For official snapshots, compatibility findings and unresolved submission work,
+see COMPATIBILITY.txt. The prepared English PR title/body is in PR-DRAFT.txt.
+Current full PVE, Incus/ARM64 and cross-version migration limits remain unchanged.

@@ -14,6 +14,10 @@ msg_error() { echo "$*" >&2; }
 msg_info() { echo "$*" >&2; }
 msg_warn() { echo "$*" >&2; }
 ensure_dependencies() { command -v jq >/dev/null; }
+curl_with_retry() {
+  printf '%s\\t%s\\n' "$1" "$2" >"$DOWNLOAD_LOG"
+  cp "$HELPER_FIXTURE" "$2"
+}
 prompt_confirm() { [[ "$1" == "Customize Reposilite application settings?" ]]; }
 prompt_input() { printf '%s' "${2}"; }
 """ + SETTINGS + "\nenv -0\n"
@@ -23,6 +27,7 @@ class SettingsTests(unittest.TestCase):
     def run_settings(self, **values):
         environment = {k: v for k, v in os.environ.items() if not k.startswith("var_")}
         environment["COMMUNITY_SCRIPTS_ROOT"] = str(ROOT)
+        environment["HELPER_FIXTURE"] = str(ROOT / "misc/reposilite-config.py")
         environment.update(values)
         result = subprocess.run(["bash", "-c", HARNESS], env=environment, capture_output=True)
         exported = {}
@@ -38,6 +43,21 @@ class SettingsTests(unittest.TestCase):
             self.assertIn(field["name"], values)
             if "default" in field:
                 self.assertEqual(values[field["name"]], str(field["default"]))
+
+    def test_remote_helper_uses_the_script_root_and_core_download_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "download"
+            result, _ = self.run_settings(
+                COMMUNITY_SCRIPTS_ROOT=str(Path(directory) / "absent"),
+                COMMUNITY_SCRIPTS_URL="https://scripts.example.test/custom",
+                COMMUNITY_SCRIPTS_CORE_URL="https://core.example.test/engine",
+                DOWNLOAD_LOG=str(log),
+                var_repositories_json=json.dumps([{"id": "test", "visibility": "PRIVATE", "storageProvider": {"type": "fs"}}]),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            url, temporary = log.read_text().strip().split("\t")
+            self.assertEqual(url, "https://scripts.example.test/custom/misc/reposilite-config.py")
+            self.assertFalse(Path(temporary).exists())
 
     def test_custom_values_and_shell_metacharacters_are_preserved(self):
         result, values = self.run_settings(
@@ -149,10 +169,38 @@ class SettingsTests(unittest.TestCase):
     def test_unsupported_os_and_invalid_provider_fail_before_creation(self):
         result, _ = self.run_settings(var_os="debian")
         self.assertNotEqual(result.returncode, 0)
-        for quota in ("bogus", "0%", "101%", "-2GB"):
+        for quota in ("bogus", "0%", "101%", "-2GB", "1B", "1TB", "9223372036854775808", "8589934592GB"):
             repository = {"id": "broken", "visibility": "PUBLIC", "storageProvider": {"type": "fs", "quota": quota}}
             result, _ = self.run_settings(var_repositories_json=json.dumps([repository]))
             self.assertNotEqual(result.returncode, 0)
+
+    def test_native_filesystem_quotas_and_optional_default(self):
+        for quota in (None, "25%", "100%", "500", "1KB", "5mb", "2GB"):
+            with self.subTest(quota=quota):
+                provider = {"type": "fs"}
+                if quota is not None:
+                    provider["quota"] = quota
+                result, _ = self.run_settings(var_repositories_json=json.dumps([
+                    {"id": "valid", "visibility": "PRIVATE", "storageProvider": provider}]))
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_filesystem_mounts_are_isolated_and_cannot_expose_application_data(self):
+        for public, private in [("shared", "shared"), ("shared", "shared/nested"),
+                                ("private", ""), ("nested/../private", ""),
+                                ("..", ""), ("/var/lib/reposilite", ""),
+                                ("/etc/reposilite", ""), ("/srv", "")]:
+            with self.subTest(public=public, private=private):
+                repositories = [{"id": name, "visibility": visibility, "storageProvider": {
+                    "type": "fs", "mount": mount}} for name, visibility, mount in (
+                        ("public", "PUBLIC", public), ("private", "PRIVATE", private))]
+                result, _ = self.run_settings(var_repositories_json=json.dumps(repositories))
+                self.assertNotEqual(result.returncode, 0)
+        for public, private in [("separate-public", "separate-private"),
+                                ("/srv/public-artifacts", "/mnt/private-artifacts")]:
+            repositories = [{"id": name, "visibility": "PRIVATE", "storageProvider": {
+                "type": "fs", "mount": mount}} for name, mount in (("public", public), ("private", private))]
+            result, _ = self.run_settings(var_repositories_json=json.dumps(repositories))
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_s3_namespaces_cannot_overlap(self):
         provider = {"type": "s3", "bucketName": "maven-artifacts", "region": "auto", "accessKey": "fixture", "secretKey": "fixture"}

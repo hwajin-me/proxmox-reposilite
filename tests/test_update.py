@@ -12,6 +12,7 @@ UPDATE = SOURCE.split("function update_alpine() {", 1)[1].split("\nstart\n", 1)[
 UPDATE = "function update_alpine() {" + UPDATE
 MANAGER_SECRET = "test-only-manager-secret"
 STUBS = r'''
+set -eo pipefail
 header_info() { :; }
 check_container_storage() { :; }
 check_container_resources() { :; }
@@ -20,7 +21,16 @@ msg_info() { :; }
 msg_ok() { :; }
 msg_error() { echo "$*" >&2; }
 flock() { [[ "${FAULT:-}" != locked ]]; }
-check_for_gh_release() { CHECK_UPDATE_RELEASE=v3.6.5; return 0; }
+check_for_gh_release() {
+  case "${FAULT:-}" in
+    no-update) return 1 ;;
+    release-dns) return 6 ;;
+    release-api) return 22 ;;
+    release-empty) return 250 ;;
+  esac
+  CHECK_UPDATE_RELEASE=v3.6.5
+  return 0
+}
 curl_with_retry() {
   [[ "${FAULT:-}" != download ]] || return 1
   if [[ $# -gt 1 ]]; then printf new-jar >"$2"; else printf '%064d' 0; fi
@@ -52,6 +62,8 @@ curl() {
       case "${FAULT:-}" in
         settings-empty) return 0 ;;
         settings-json) body='{"repositories":null}' ;;
+        settings-missing-id) body='{"repositories":[{}]}' ;;
+        settings-duplicate-id) body='{"repositories":[{"id":"private"},{"id":"private"}]}' ;;
         *) body='{"repositories":[{"id":"private"}]}' ;;
       esac
       ;;
@@ -182,15 +194,24 @@ class UpdateTests(unittest.TestCase):
 
     def test_preflight_failures_never_stop_running_service(self):
         for fault in ["locked", "missing-credentials", "credentials", "settings", "settings-empty",
-                      "settings-json", "download", "checksum", "stop"]:
+                      "settings-json", "settings-missing-id", "settings-duplicate-id", "download", "checksum", "stop"]:
             with self.subTest(fault=fault):
                 root, result = self.run_update(fault)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual((root / "service").read_text().strip(), "running")
                 self.assertEqual((root / "opt/reposilite/reposilite.jar").read_text(), "old-jar")
                 self.assertFalse((root / "opt/reposilite/reposilite.jar.new").exists())
-                if fault in ["missing-credentials", "credentials", "settings", "settings-empty", "settings-json"]:
+                if fault in ["missing-credentials", "credentials", "settings", "settings-empty", "settings-json", "settings-missing-id", "settings-duplicate-id"]:
                     self.assertFalse((root / "events").exists())
+
+    def test_release_lookup_errors_remain_errors_without_stopping_service(self):
+        for fault, status in [("no-update", 0), ("release-dns", 6), ("release-api", 22), ("release-empty", 250)]:
+            with self.subTest(fault=fault):
+                root, result = self.run_update(fault)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual((root / "service").read_text().strip(), "running")
+                self.assertFalse((root / "events").exists())
+                self.assertEqual((root / "opt/reposilite/reposilite.jar").read_text(), "old-jar")
 
     def test_backup_failures_restart_the_unchanged_application(self):
         for fault in ["backup-root", "backup-application", "backup-state"]:
