@@ -59,7 +59,7 @@ _adapter_temp=""
 trap '[[ -z "$_adapter_temp" ]] || rm -f -- "$_adapter_temp"' EXIT
 if [[ -z "$_adapter_helper" || ! -f "$_adapter_helper" ]]; then
   _adapter_url="${COMMUNITY_SCRIPTS_URL:-${REPOSILITE_SCRIPTS_URL:-https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main}}"
-  if ! python3 - "$_adapter_url" <<'PY'
+  python3 - "$_adapter_url" <<'PY'
 import sys
 from urllib.parse import unquote, urlsplit
 try:
@@ -72,11 +72,9 @@ try:
     assert not any(ord(c) <= 32 or c in "\"'`$\\" for c in decoded)
     assert not any(part in (".", "..") for part in unquote(parsed.path).split("/"))
 except (AssertionError, ValueError):
-    sys.exit("Invalid HTTPS adapter source root")
+    print("Invalid HTTPS adapter source root", file=sys.stderr)
+    sys.exit(2)
 PY
-  then
-    exit 2
-  fi
   _adapter_temp="$(mktemp)"
   _adapter_helper="$_adapter_temp"
   curl --proto '=https' --proto-redir '=https' -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
