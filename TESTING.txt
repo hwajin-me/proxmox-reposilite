@@ -1,0 +1,28 @@
+Validation date: 2026-10-31
+Platform: Proxmox VE 9.1.6, amd64
+Container: unprivileged Alpine 3.24 (updated to 3.24.3), 1 CPU, 1024 MiB RAM
+Application: Reposilite 3.6.5, Java 21
+
+Passed:
+- Fresh LXC installation from the public raw CT URL, including installer lookup.
+- Runnable JAR checked against the publisher's SHA256.
+- Dashboard HTTP 200 from the host and from inside the container.
+- Initial manager authentication through /api/auth/me.
+- Authenticated Maven artifact upload and byte-for-byte public download.
+- Core-generated update entrypoint, already-current path.
+- Forced redeployment of 3.6.5 through the update path by temporarily changing
+  only the local version marker to 3.6.4; replacement JAR verified and deployed,
+  previous JAR/version backed up, manager auth and uploaded artifact preserved.
+- Container reboot; OpenRC automatic service startup, HTTP readiness,
+  authentication and uploaded artifact persistence.
+- Test artifact deleted through the authenticated HTTP API after validation.
+- bash -n for both scripts, JSON parsing, resource/metadata consistency,
+  git diff --check and public files checked for host-specific values/secrets.
+
+Not tested:
+- Cross-version database migrations (redeployment used the same JAR version).
+- ARM64 and Incus.
+- A deliberately broken release and rollback recovery.
+
+Public and DevScripts copies differ only in _CS_DEFAULT_URL so each resolves
+its own matching installer and generated update entrypoint.
