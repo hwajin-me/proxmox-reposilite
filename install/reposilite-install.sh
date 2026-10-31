@@ -61,6 +61,9 @@ EOF
   fi
   source /etc/reposilite/runtime.conf
   msg_ok "Prepared Reposilite native configuration"
+  download_file "${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main}/misc/reposilite-update-guard.sh" /etc/reposilite/update-guard.sh
+  sh -n /etc/reposilite/update-guard.sh
+  chmod 700 /etc/reposilite/update-guard.sh
   if [[ "$database_type" != sqlite ]]; then
     download_file "${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main}/misc/DatabasePreflight.java" /etc/reposilite/DatabasePreflight.java
     msg_info "Checking Reposilite external database before initialization"
@@ -114,6 +117,13 @@ EOF
   umask 022
   cat >/etc/init.d/reposilite <<'EOF'
 #!/sbin/openrc-run
+# BEGIN REPOSILITE UPDATE GUARD
+if [ ! -x /etc/reposilite/update-guard.sh ] ||
+  ! /etc/reposilite/update-guard.sh "${RC_CMD:-${1:-start}}"; then
+  printf '%s\n' 'Reposilite update recovery guard refused this action.' >&2
+  exit 1
+fi
+# END REPOSILITE UPDATE GUARD
 description="Reposilite Maven repository manager"
 [ ! -f /etc/reposilite/database.env ] || . /etc/reposilite/database.env
 command="/usr/bin/java"

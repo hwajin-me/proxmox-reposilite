@@ -40,6 +40,13 @@ Updates and data
   Services and tokens use /etc/conf.d/reposilite. Console logs are in
   /var/log/reposilite; Reposilite also writes logs in its working directory.
 
+  Unattended mode uses PHS_SILENT=1. For host-wide update-apps integration and
+  scheduled runs, see AUTO-UPDATES.txt and tools/pve/update-apps.sh. The explicit
+  adapter recognises this standalone app while keeping other apps on official
+  sources. The unmodified official update-apps cannot discover this uncatalogued
+  repo. Official update-lxcs already supports its Alpine OS; it does not update
+  the Reposilite JAR. No schedule is enabled by default.
+
   An exclusive lock prevents concurrent updates. Downloads are verified before
   stopping the service. After a clean stop, a root-only backup is created under
   /opt/reposilite-backups/<timestamp>-<pid>/ with separate application/ and state/
@@ -54,7 +61,10 @@ Updates and data
   a working dashboard alone is insufficient. API calls have time limits and
   local probes bypass HTTP proxy environment settings. The state backup is retained;
   the live database is not overwritten automatically because the new release
-  might have migrated it. Inspect /var/log/reposilite before recovery.
+  might have migrated it. A persistent /etc/reposilite/update-in-progress marker
+  blocks automatic startup after failure or interruption, including on reboot.
+  Inspect /var/log/reposilite and review the JAR/database state before removing
+  that marker. AUTO-UPDATES.txt describes recovery and storage timeout settings.
 
   To restore state after deciding which application version to run, stop the
   service and copy the required files from state/files/<original-absolute-path>

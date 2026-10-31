@@ -9,6 +9,8 @@ permissions:
 env:
   # Fixed compatibility fixture; production installs still discover the release.
   REPOSILITE_COMPAT_VERSION: 3.6.5
+  PVE_TOOLS_COMPAT_REVISION: 9b65262e4241e9c797e8113169c62a8ff8a659c3
+  CORE_COMPAT_REVISION: 5acac4483be88990354dd4e3778e2cdce4df428e
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -31,6 +33,22 @@ jobs:
           printf '%s  %s\n' "$checksum" "$jar" | sha256sum -c -
           printf 'REPOSILITE_TEST_JAR=%s\n' "$jar" >>"$GITHUB_ENV"
           printf 'REPOSILITE_TEST_JAVA=/usr/lib/jvm/java-21-openjdk-%s/bin/java\n' "$(dpkg --print-architecture)" >>"$GITHUB_ENV"
+      - name: Prepare verified update integration fixtures
+        run: |
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/$PVE_TOOLS_COMPAT_REVISION/tools/pve/update-apps.sh" -o "$RUNNER_TEMP/update-apps.sh"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/$PVE_TOOLS_COMPAT_REVISION/tools/pve/update-lxcs.sh" -o "$RUNNER_TEMP/update-lxcs.sh"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://raw.githubusercontent.com/community-scripts/core/$CORE_COMPAT_REVISION/core/core.func" -o "$RUNNER_TEMP/core.func"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://raw.githubusercontent.com/community-scripts/core/$CORE_COMPAT_REVISION/misc/update.sh" -o "$RUNNER_TEMP/core-update.sh"
+          printf '%s  %s\n' \
+            f619846d1b0c4faeb7129294973fe3bc411ac983b68a610b585a056a782c1e4a "$RUNNER_TEMP/update-apps.sh" \
+            b448501017c3d18eb80adbd841e261772abfd865238bcaa0b3c41c8f5c1bf622 "$RUNNER_TEMP/update-lxcs.sh" \
+            38a782e0d05c805adea4e9f166cf10d8224c29176c41126e54a64d9ecb0b6be2 "$RUNNER_TEMP/core.func" \
+            d94f719274995ad956ead12cde0582e3b04ae15d3a74a38ee3f2cea119124873 "$RUNNER_TEMP/core-update.sh" | sha256sum -c -
+          printf '%s\n' \
+            "REPOSILITE_UPDATE_APPS_FIXTURE=$RUNNER_TEMP/update-apps.sh" \
+            "REPOSILITE_UPDATE_LXCS_FIXTURE=$RUNNER_TEMP/update-lxcs.sh" \
+            "REPOSILITE_TEST_CORE_ENTRYPOINT=$RUNNER_TEMP/core.func" \
+            "REPOSILITE_TEST_CORE_UPDATE=$RUNNER_TEMP/core-update.sh" >>"$GITHUB_ENV"
       - name: Check Bash syntax
         run: |
           while IFS= read -r -d '' script; do
@@ -50,6 +68,8 @@ jobs:
           done < <(git ls-files -z -- '*.sh')
       - name: Check metadata and configuration behavior
         run: python3 -m unittest discover -s tests -v
+      - name: Check Linux recovery authorization and locking
+        run: sudo env PYTHONPATH=tests python3 -m unittest -v test_recovery.LinuxRecoveryGuardTests
       - name: Check whitespace
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

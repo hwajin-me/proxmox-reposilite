@@ -1,0 +1,9 @@
+# /etc/cron.d/reposilite-app-updates — root-owned, mode 0600.
+# Install the reviewed adapter as /usr/local/sbin/reposilite-update-apps first.
+# Set explicit IDs, e.g. REPOSILITE_CTIDS=101,102, to enable this job.
+# Leave empty to keep it inactive. Times use the Proxmox host timezone.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+REPOSILITE_CTIDS=
+
+17 4 * * * root [ -n "$REPOSILITE_CTIDS" ] && /usr/bin/flock -n /run/lock/reposilite-update-apps.lock /usr/bin/env var_container="$REPOSILITE_CTIDS" var_backup=no var_unattended=yes var_skip_confirm=yes var_auto_reboot=no var_continue_on_error=no /usr/local/sbin/reposilite-update-apps >>/var/log/reposilite-auto-update.log 2>&1

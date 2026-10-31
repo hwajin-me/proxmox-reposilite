@@ -8,11 +8,14 @@ import tempfile
 import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1] / "ct/reposilite.sh").read_text()
+GUARD_SOURCE = Path(__file__).resolve().parents[1] / "misc/reposilite-update-guard.sh"
+INIT_CONTENT = "#!/sbin/openrc-run\n# Custom service content\nstart_pre() { :; }\n"
 UPDATE = SOURCE.split("function update_alpine() {", 1)[1].split("\nstart\n", 1)[0]
 UPDATE = "function update_alpine() {" + UPDATE
 MANAGER_SECRET = "test-only-manager-secret"
 STUBS = r'''
 set -eo pipefail
+UPDATE_TEST_PID=$$
 header_info() { :; }
 check_container_storage() { :; }
 check_container_resources() { :; }
@@ -33,10 +36,12 @@ check_for_gh_release() {
 }
 curl_with_retry() {
   [[ "${FAULT:-}" != download ]] || return 1
+  if [[ "$1" == */misc/reposilite-update-guard.sh ]]; then cp "$GUARD_SOURCE" "$2"; return; fi
   if [[ $# -gt 1 ]]; then printf new-jar >"$2"; else printf '%064d' 0; fi
 }
 sha256sum() { [[ "${FAULT:-}" != checksum ]]; }
-sleep() { :; }
+sync() { printf '%s\n' "$*" >"$FIXTURE/marker-synced"; }
+sleep() { SECONDS=$((SECONDS + ${1:-0})); }
 curl() {
   printf '%s\n' "$*" >>"$FIXTURE/health-requests"
   local output="" url="" config="" auth="" body=""
@@ -79,7 +84,10 @@ curl() {
       [[ "${FAULT:-}" != unreachable-storage ]] || return 1
       body='{"type":"DIRECTORY","files":[]}'
       ;;
-    *) [[ "${FAULT:-}" != health ]] || return 1 ;;
+    *)
+      [[ "${FAULT:-}" != health ]] || return 1
+      [[ "${FAULT:-}" != budget ]] || SECONDS=$((SECONDS + 115))
+      ;;
   esac
   if [[ -n "$output" ]]; then
     printf '%s' "$body" >"$output"
@@ -90,11 +98,16 @@ curl() {
 rc-service() {
   echo "$2" >>"$FIXTURE/events"
   if [[ "$2" == stop ]]; then
+    [[ -f "$FIXTURE/marker-synced" && -f "$FIXTURE/etc/reposilite/update-in-progress" ]] || return 1
     [[ "${FAULT:-}" != stop ]] || return 1
     echo stopped >"$FIXTURE/service"
   elif [[ "$2" == start ]]; then
     if [[ $(cat "$FIXTURE/opt/reposilite/reposilite.jar") == new-jar ]]; then
       echo migrated-db >"$FIXTURE/data/reposilite.db"
+      if [[ "${FAULT:-}" == killed-after-start ]]; then
+        echo running >"$FIXTURE/service"
+        kill -KILL "$UPDATE_TEST_PID"
+      fi
       [[ "${FAULT:-}" != start ]] || return 1
     fi
     echo running >"$FIXTURE/service"
@@ -102,6 +115,7 @@ rc-service() {
 }
 create_backup() {
   [[ $(cat "$FIXTURE/service") == stopped ]] || exit 42
+  if [[ "${FAULT:-}" == killed ]]; then kill -KILL "$UPDATE_TEST_PID"; exit 0; fi
   [[ "${FAULT:-}" != "backup-${BACKUP_DIR##*/}" ]] || exit 1
   mkdir -p "$BACKUP_DIR"
   for file in "$@"; do
@@ -115,7 +129,7 @@ restore_backup() {
   rm -rf "$BACKUP_DIR"
 }
 mv() {
-  [[ "${FAULT:-}" != replace ]] || return 1
+  [[ "${FAULT:-}" != replace || "$1" != */reposilite.jar.new ]] || return 1
   command mv "$@"
 }
 install() {
@@ -126,7 +140,8 @@ install() {
 
 
 class UpdateTests(unittest.TestCase):
-    def run_update(self, fault="", tls=False, legacy=False, manager_secret=MANAGER_SECRET, trace=False):
+    def run_update(self, fault="", tls=False, legacy=False, manager_secret=MANAGER_SECRET, trace=False,
+                   readiness_timeout=None, storage_timeout=None, custom_init=INIT_CONTENT, pending=False):
         temporary = tempfile.TemporaryDirectory(prefix="reposilite-update-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -135,13 +150,21 @@ class UpdateTests(unittest.TestCase):
         (root / "data").chmod(0o755)
         (root / "var/log/reposilite").chmod(0o755)
         (root / "opt/reposilite/reposilite.jar").write_text("old-jar")
-        (root / "etc/init.d/reposilite").write_text("service")
+        (root / "etc/init.d/reposilite").write_text(custom_init)
+        (root / "etc/init.d/reposilite").chmod(0o751)
         (root / "root/.reposilite").write_text("3.6.4\n")
         config = f'data_directory="{root}/data"\nhttp_port=9093\nadmin_user="fixture-manager"\n'
         secret = "legacy-fixture-secret" if legacy else manager_secret
         if fault != "missing-credentials":
             config += f'{"bootstrap_secret" if legacy else "admin_secret"}={shlex.quote(secret)}\n'
+        if readiness_timeout is not None:
+            config += f'update_readiness_timeout={shlex.quote(readiness_timeout)}\n'
+        if storage_timeout is not None:
+            config += f'update_storage_timeout={shlex.quote(storage_timeout)}\n'
         (root / "etc/conf.d/reposilite").write_text(config)
+        if pending:
+            (root / "etc/reposilite").mkdir()
+            (root / "etc/reposilite/update-in-progress").write_text("existing recovery marker")
         if tls:
             (root / "etc/reposilite/tls").mkdir(parents=True)
             (root / "etc/reposilite/tls/private-key.pem").write_text("private-key-fixture")
@@ -159,7 +182,8 @@ class UpdateTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", *(["-x"] if trace else []), "-c", STUBS + "\n" + code + "\nupdate_script\n"],
             env={**os.environ, "FIXTURE": str(root), "FAULT": fault, "STD": "",
-                 "EXPECTED_AUTH": f"fixture-manager:{secret}"},
+                 "EXPECTED_AUTH": f"fixture-manager:{secret}", "GUARD_SOURCE": str(GUARD_SOURCE),
+                 "PHS_SILENT": "1"},
             capture_output=True, text=True,
         )
         self.assertNotIn(secret, result.stdout + result.stderr)
@@ -179,8 +203,12 @@ class UpdateTests(unittest.TestCase):
         saved_journal = list((root / "opt/reposilite-backups").glob("*/state/files/**/reposilite.db-journal"))
         self.assertEqual(saved_journal[0].read_text(), "original-db-journal")
         saved_init = list((root / "opt/reposilite-backups").glob("*/application/files/**/init.d/reposilite"))
-        self.assertEqual(saved_init[0].read_text(), "service")
+        self.assertIn("# BEGIN REPOSILITE UPDATE GUARD", saved_init[0].read_text())
+        self.assertIn(INIT_CONTENT.split("\n", 1)[1], saved_init[0].read_text())
         self.assertIn('umask="0077"', (root / "etc/init.d/reposilite").read_text())
+        self.assertEqual((root / "etc/init.d/reposilite").stat().st_mode & 0o777, 0o751)
+        self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
+        self.assertFalse((root / "run/reposilite-update.authorized").exists())
         self.assertEqual((root / "data").stat().st_mode & 0o777, 0o700)
         self.assertEqual((root / "var/log/reposilite").stat().st_mode & 0o777, 0o700)
         for suffix in ["", "-wal", "-shm", "-journal"]:
@@ -232,7 +260,11 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual((root / "data/reposilite.db").read_text().strip(), "migrated-db")
                 saved_db = list((root / "opt/reposilite-backups").glob("*/state/files/**/reposilite.db"))
                 self.assertEqual(saved_db[0].read_text(), "original-db")
-                self.assertEqual((root / "etc/init.d/reposilite").read_text(), "service")
+                restored_init = (root / "etc/init.d/reposilite").read_text()
+                self.assertIn(INIT_CONTENT.split("\n", 1)[1], restored_init)
+                self.assertEqual(restored_init.count("# BEGIN REPOSILITE UPDATE GUARD"), 1)
+                self.assertTrue((root / "etc/reposilite/update-in-progress").exists())
+                self.assertFalse((root / "run/reposilite-update.authorized").exists())
 
     def test_file_replacement_failure_cleans_download_and_preserves_old_jar(self):
         root, result = self.run_update("replace")
@@ -264,6 +296,73 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         encoded_auth = (root / "stdin-auth").read_text().splitlines()[0].removeprefix("user = ")
         self.assertEqual(json.loads(encoded_auth), f"fixture-manager:{secret}")
+
+    def test_pending_recovery_prevents_even_a_silent_update(self):
+        root, result = self.run_update(pending=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / "events").exists())
+        self.assertFalse((root / "health-requests").exists())
+        self.assertEqual((root / "etc/reposilite/update-in-progress").read_text(), "existing recovery marker")
+
+    def test_nonstandard_init_is_rejected_before_stopping_service(self):
+        original = "#!/bin/sh\ncustom_start() { :; }\n"
+        root, result = self.run_update(custom_init=original)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / "events").exists())
+        self.assertEqual((root / "etc/init.d/reposilite").read_text(), original)
+        self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
+        self.assertFalse((root / "opt/reposilite/reposilite.jar.new").exists())
+
+    def test_killed_update_keeps_persistent_boot_guard(self):
+        for fault in ["killed", "killed-after-start"]:
+            with self.subTest(fault=fault):
+                root, result = self.run_update(fault)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue((root / "etc/reposilite/update-in-progress").exists())
+                self.assertIn("# BEGIN REPOSILITE UPDATE GUARD", (root / "etc/init.d/reposilite").read_text())
+                self.assertEqual((root / "root/.reposilite").read_text(), "3.6.4\n")
+                pid = int((root / "run/reposilite-update.authorized").read_text())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+
+    def test_custom_guard_reference_does_not_suppress_guard_injection(self):
+        original = '#!/sbin/openrc-run\n# Note: # BEGIN REPOSILITE UPDATE GUARD\ncustom_hook() { :; }\n'
+        root, result = self.run_update("health", custom_init=original)
+        self.assertNotEqual(result.returncode, 0)
+        restored = (root / "etc/init.d/reposilite").read_text()
+        self.assertIn('/etc/reposilite/update-guard.sh', restored)
+        self.assertIn(original.split("\n", 1)[1], restored)
+        self.assertTrue((root / "etc/reposilite/update-in-progress").exists())
+
+    def test_invalid_timeout_values_fail_before_service_changes(self):
+        for options in [
+            {"readiness_timeout": "29"}, {"readiness_timeout": "3601"},
+            {"readiness_timeout": "030"}, {"readiness_timeout": "false"},
+            {"storage_timeout": "0"}, {"storage_timeout": "121"},
+            {"storage_timeout": "1;false"},
+        ]:
+            with self.subTest(options=options):
+                root, result = self.run_update(**options)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "events").exists())
+                self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
+
+    def test_storage_probe_uses_configured_budget_and_remaining_deadline(self):
+        for fault, options, maximum in [
+            ("", {}, 30), ("", {"storage_timeout": "5"}, 5),
+            ("budget", {}, 5),
+            ("", {"readiness_timeout": "30", "storage_timeout": "120"}, 30),
+        ]:
+            with self.subTest(fault=fault, options=options):
+                root, result = self.run_update(fault, **options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                requests = (root / "health-requests").read_text().splitlines()
+                storage = shlex.split(next(line for line in requests if "/api/maven/details/private" in line))
+                budget = int(storage[max(i for i, value in enumerate(storage) if value == "--max-time") + 1])
+                self.assertGreaterEqual(budget, 1)
+                self.assertLessEqual(budget, maximum)
+                if not fault and not options:
+                    self.assertEqual(budget, 30)
 
 
 if __name__ == "__main__":

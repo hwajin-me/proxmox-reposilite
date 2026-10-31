@@ -1,0 +1,145 @@
+Reposilite unattended and scheduled updates
+
+Application updates and OS updates use different paths:
+
+  Reposilite JAR:     update-apps adapter -> container update -> Core -> Reposilite
+  Alpine packages:  official update-lxcs -> apk -U upgrade
+
+The official update-apps script currently checks only the official application
+repository. This standalone reposilite is not catalogued there, so the original
+script skips it before invoking update. JSON updateable=true does not change
+that. This distribution provides an explicit compatibility adapter; it does
+not claim that the unmodified official tool already supports this repository.
+
+What the adapter changes
+
+tools/pve/update-apps.sh verifies a pinned official update-apps source with
+SHA256 and checks its source context. It routes exactly two script lookups:
+reposilite and the legacy alpine-reposilite use this repository's canonical
+ct/reposilite.sh; other application slugs keep the official source root. The
+original selection, backups, resource adjustment, unattended command, results
+and reboot controls remain in the official implementation. No proxy is used.
+
+Pin: community-scripts/ProxmoxVE 9b65262e4241e9c797e8113169c62a8ff8a659c3
+SHA256: f619846d1b0c4faeb7129294973fe3bc411ac983b68a610b585a056a782c1e4a
+
+--help does not access the host or network. --render downloads/verifies and
+prints the adapted source without executing it or accessing Proxmox. Unknown
+source content or a failed checksum aborts before any container update.
+
+Install a reviewed local copy on a Proxmox host
+
+Run these commands in the PVE root shell. Keep the generated file for review:
+
+  reposilite_update_temp="$(mktemp -d)"
+  curl -fsSL https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main/tools/pve/update-apps.sh -o "$reposilite_update_temp/adapter.sh"
+  bash "$reposilite_update_temp/adapter.sh" --render > "$reposilite_update_temp/update-apps.sh"
+  bash -n "$reposilite_update_temp/update-apps.sh"
+  less "$reposilite_update_temp/update-apps.sh"
+  install -m 700 "$reposilite_update_temp/update-apps.sh" /usr/local/sbin/reposilite-update-apps
+
+The local copy retains the official copyright/license header. Like the original
+tool, it still loads Community Scripts Core and the container update entrypoint;
+the complete update chain depends on those sources being reachable.
+
+For a private fork, set REPOSILITE_SCRIPTS_URL to its HTTPS scripts root when
+running the installed copy, including in its cron environment. The adapter's
+own helper download root is COMMUNITY_SCRIPTS_URL, or a local checkout can be
+selected through COMMUNITY_SCRIPTS_ROOT. Script and Core roots remain separate.
+
+Unattended application update
+
+Replace 101,102 below with the intended container IDs:
+
+  var_container=101,102 var_backup=no var_unattended=yes var_skip_confirm=yes var_auto_reboot=no var_continue_on_error=no /usr/local/sbin/reposilite-update-apps
+
+To include all running community-script-tagged applications, use
+var_container=all_running instead. Other apps keep their official update paths.
+Core normally adds community-script automatically. Explicit CTIDs also work
+when the tag has been removed. The adapter recognises both Reposilite slugs.
+
+var_backup=yes additionally needs var_backup_storage=<storage>. This requests
+the official full-LXC backup/restore workflow. Reposilite's application/state
+backup remains separate; external SQL and artifact storage require their own
+consistent backups. Set all unattended flags explicitly to avoid host prompts.
+
+var_dry_run=yes uses the official version parser and does not apply the JAR.
+It is not entirely read-only: upstream can start stopped containers and repair
+a legacy Gitea entrypoint before reaching its dry-run branch.
+
+Inside a container, the native command is:
+
+  PHS_SILENT=1 /usr/bin/update
+
+Use the environment flag; Core's generated entrypoint does not forward a
+--silent argument. The host tool also supplies its no-op clear command for
+headless runs. Saved admin_user/admin_secret must remain current after token
+rotation; credential failure leaves the running application untouched.
+
+Schedule application updates
+
+examples/reposilite-app-updates.cron is an /etc/cron.d template. It is inactive
+until REPOSILITE_CTIDS is filled in. Set the desired IDs and schedule, then
+install it as /etc/cron.d/reposilite-app-updates with root ownership/mode 600.
+The example runs daily at 04:17 in the host's timezone, sets every unattended
+choice, disables automatic reboot and locks concurrent scheduled host runs.
+It logs to /var/log/reposilite-auto-update.log; manage retention with the host's
+log rotation policy. No cron entry or scheduled job is installed by the LXC
+installer or by this development task.
+
+Official OS updates
+
+The unmodified update-lxcs script already detects Alpine and executes
+apk -U upgrade. It updates packages such as Java; it does not download the
+Reposilite JAR. Run it from the PVE shell for interactive OS maintenance:
+
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/update-lxcs.sh)"
+
+For OS scheduling, use the official cron manager and review its container
+selection/exclusions and schedule:
+
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/pve/cron-update-lxcs.sh)"
+
+That manager installs /usr/local/bin/update-lxcs.sh and /etc/update-lxcs.conf.
+Its worker has the same Alpine package-manager branch. Schedule OS and app
+maintenance at separate times. Neither OS tool replaces Reposilite's app updater.
+
+Interrupted update recovery
+
+Before stopping Reposilite, an update records /etc/reposilite/update-in-progress.
+Only the live updater with its exclusive lock and private /run authorization
+may start the application while that marker exists. OpenRC refuses ordinary
+start/restart, including after reboot, if an update failed or was interrupted.
+Successful repository readiness verification removes the marker.
+
+If the marker remains, inspect the logs and the application/state backup path
+reported by the update. Choose the compatible JAR/database state and restore
+state if needed. After reviewing compatibility, remove the marker and start
+Reposilite manually. Do not clear it as part of an unattended retry loop.
+
+Slow external storage can use these root-only /etc/conf.d/reposilite settings:
+
+  update_readiness_timeout=120
+  update_storage_timeout=30
+
+The first accepts 30-3600 seconds, the second 1-120 seconds. A storage probe is
+also capped by the remaining total readiness deadline. Invalid values fail
+before stopping the service. Configuration/data and certificates are preserved.
+
+Validation scope
+
+Tests use actual pinned official source with mocked Proxmox commands, plus the
+real Core-generated entrypoint/update helper. They check source routing, legacy
+resolution, PHS_SILENT propagation, error statuses, the OS-only Alpine command
+and update/recovery behavior. These are not a current end-to-end PVE batch run.
+The supplied host remains unreachable; no host schedule was applied. See
+TESTING.txt for runtime fixture evidence and the current complete test count.
+
+Sources
+https://community-scripts.org/scripts/update-apps
+https://community-scripts.org/scripts/update-lxcs
+https://community-scripts.org/docs/tools/pve/update-apps
+https://github.com/community-scripts/ProxmoxVE/blob/9b65262e4241e9c797e8113169c62a8ff8a659c3/tools/pve/update-apps.sh
+https://github.com/community-scripts/ProxmoxVE/blob/9b65262e4241e9c797e8113169c62a8ff8a659c3/tools/pve/update-lxcs.sh
+https://github.com/community-scripts/ProxmoxVE/blob/9b65262e4241e9c797e8113169c62a8ff8a659c3/tools/pve/cron-update-lxcs.sh
+https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/misc/update.sh

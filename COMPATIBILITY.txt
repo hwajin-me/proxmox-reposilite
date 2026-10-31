@@ -7,6 +7,7 @@ created or updated no PR.
 Official snapshots reviewed
 DevScripts f7b1ed82c7b7be7cb91386b10ec581c74ed18554
 Core       5acac4483be88990354dd4e3778e2cdce4df428e
+ProxmoxVE  9b65262e4241e9c797e8113169c62a8ff8a659c3 (host update tools)
 
 Runtime contracts
 
@@ -26,7 +27,28 @@ PASS  CT helper fetching now uses curl_with_retry with the script-source root.
 PASS  Standard lifecycle/messaging, existence checks, update exit, downloads,
       backups and final motd_ssh/customize/cleanup_lxc calls are present.
 PASS  Shell syntax plus additional ShellCheck/shfmt gates, metadata/input checks
-      and 50 tests. JDBC compatibility tests use the verified official JAR.
+      and the automated suite in TESTING.txt. JDBC checks use the official JAR.
+
+Unattended update tool contracts
+
+PASS  Actual Core write_update_entrypoint and misc/update.sh preserve the stored
+      standalone root and PHS_SILENT=1. Website state=unknown permits updates;
+      legacy slug resolution, helper fallback and error status are exercised.
+GAP   Unmodified official update-apps only looks in the official app repository;
+      it skips this standalone app, even with an explicit CTID. Metadata alone
+      cannot fix that. Use the explicit tools/pve/update-apps.sh adapter.
+PASS  The adapter verifies a pinned source hash/context and changes only two URL
+      lookups. Both Reposilite slugs use canonical metadata here; other apps
+      retain official lookups. Original unattended, backup and OS paths remain.
+PASS  Official update-lxcs executes apk -U upgrade in Alpine. That updates OS
+      packages, including Java, and does not replace the Reposilite JAR.
+PASS  Persistent OpenRC recovery protection survives failed/killed updates and
+      reboot. Authorization requires the live updater and its exclusive lock.
+      Core retains ownership of the update entrypoint and signal/error traps.
+NOTE  Cron templates are supplied but no host job is installed. Upstream dry-run
+      can start stopped containers/repair a legacy entrypoint. See AUTO-UPDATES.txt.
+GAP   These host-tool checks use official source with mocked PVE commands; the
+      current complete install/batch-update/cron path still needs a real PVE run.
 
 Generator and architecture
 
@@ -48,7 +70,8 @@ FAIL  Official ct-base requires a DevScripts _CS_DEFAULT_URL in every CT file.
 GAP   Alpine-only upstream naming normally uses alpine-. The requested reposilite
       slug is retained and needs maintainer agreement before submission.
 GAP   Review placement/maintenance of misc/reposilite-config.py and the Java
-      preflight, plus which standalone tests/docs belong in an upstream patch.
+      preflight/guard, plus which standalone tests/docs belong in an upstream patch.
+      The host adapter is standalone tooling and is not part of the app proposal.
 EXC   Reposilite publishes its executable JAR through Maven, not GitHub assets.
       Core discovers releases and supplies download helpers; the original JAR
       and its SHA256 are preserved. The generic URL deployment helper does not
@@ -101,3 +124,8 @@ https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce
 https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/lib/forge.func
 https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/lib/alpine.func
 https://github.com/community-scripts/core/blob/5acac4483be88990354dd4e3778e2cdce4df428e/core/core.func
+
+https://community-scripts.org/scripts/update-apps
+https://community-scripts.org/scripts/update-lxcs
+https://github.com/community-scripts/ProxmoxVE/blob/9b65262e4241e9c797e8113169c62a8ff8a659c3/tools/pve/update-apps.sh
+https://github.com/community-scripts/ProxmoxVE/blob/9b65262e4241e9c797e8113169c62a8ff8a659c3/tools/pve/update-lxcs.sh

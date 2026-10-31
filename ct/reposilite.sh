@@ -34,13 +34,33 @@ function update_alpine() {
     msg_error "No Reposilite installation found"
     exit 1
   }
+  RECOVERY_MARKER=/etc/reposilite/update-in-progress
+  UPDATE_AUTHORIZATION=/run/reposilite-update.authorized
+  [[ ! -e "$RECOVERY_MARKER" && ! -L "$RECOVERY_MARKER" ]] || {
+    msg_error "Reposilite update recovery is required; inspect the saved state before removing $RECOVERY_MARKER"
+    exit 1
+  }
   command -v flock >/dev/null || $STD apk add --no-cache flock
   exec 9>/run/reposilite-update.lock
   flock -n 9 || {
     msg_error "Another Reposilite update is running"
     exit 1
   }
+  [[ ! -e "$RECOVERY_MARKER" && ! -L "$RECOVERY_MARKER" ]] || {
+    msg_error "Reposilite update recovery is required; inspect $RECOVERY_MARKER"
+    exit 1
+  }
   source /etc/conf.d/reposilite
+  UPDATE_READINESS_TIMEOUT="${update_readiness_timeout:-120}"
+  UPDATE_STORAGE_TIMEOUT="${update_storage_timeout:-30}"
+  [[ "$UPDATE_READINESS_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ && "$UPDATE_READINESS_TIMEOUT" -ge 30 && "$UPDATE_READINESS_TIMEOUT" -le 3600 ]] || {
+    msg_error "update_readiness_timeout must be an integer from 30 to 3600 seconds"
+    exit 1
+  }
+  [[ "$UPDATE_STORAGE_TIMEOUT" =~ ^[1-9][0-9]{0,2}$ && "$UPDATE_STORAGE_TIMEOUT" -le 120 ]] || {
+    msg_error "update_storage_timeout must be an integer from 1 to 120 seconds"
+    exit 1
+  }
   chmod 700 "${data_directory:-/var/lib/reposilite}"
   [[ ! -d /var/log/reposilite ]] || chmod 700 /var/log/reposilite
   for state_file in reposilite.db reposilite.db-wal reposilite.db-shm reposilite.db-journal; do
@@ -94,25 +114,87 @@ function update_alpine() {
     fi
     msg_ok "Verified Reposilite download"
 
+    # Inject before backing up the init script so rollback cannot remove the
+    # persistent boot guard. Custom OpenRC hooks remain untouched.
+    INIT_FIRST=
+    IFS= read -r INIT_FIRST </etc/init.d/reposilite || true
+    if [[ -L /etc/init.d/reposilite || "$INIT_FIRST" != '#!/sbin/openrc-run' ]]; then
+      rm -f /opt/reposilite/reposilite.jar.new
+      msg_error "Reposilite needs a regular OpenRC init script before updating; no service was stopped"
+      exit 1
+    fi
+    GUARD_BLOCK="$(
+      cat <<'GUARD'
+# BEGIN REPOSILITE UPDATE GUARD
+if [ ! -x /etc/reposilite/update-guard.sh ] ||
+  ! /etc/reposilite/update-guard.sh "${RC_CMD:-${1:-start}}"; then
+  printf '%s\n' 'Reposilite update recovery guard refused this action.' >&2
+  exit 1
+fi
+# END REPOSILITE UPDATE GUARD
+GUARD
+    )"
+    if grep -Eq '^# (BEGIN|END) REPOSILITE UPDATE GUARD$' /etc/init.d/reposilite; then
+      if [[ "$(sed -n '2,8p' /etc/init.d/reposilite)" != "$GUARD_BLOCK" ||
+      "$(grep -Fc '# BEGIN REPOSILITE UPDATE GUARD' /etc/init.d/reposilite)" != 1 ]]; then
+        rm -f /opt/reposilite/reposilite.jar.new
+        msg_error "Reposilite init recovery guard is incomplete; no service was stopped"
+        exit 1
+      fi
+    fi
+    mkdir -p /etc/reposilite
+    chmod 700 /etc/reposilite
+    if ! curl_with_retry "${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/hwajin-me/proxmox-reposilite/main}/misc/reposilite-update-guard.sh" /etc/reposilite/update-guard.sh.new ||
+      ! sh -n /etc/reposilite/update-guard.sh.new; then
+      rm -f /etc/reposilite/update-guard.sh.new /opt/reposilite/reposilite.jar.new
+      msg_error "Could not prepare Reposilite update recovery guard; no service was stopped"
+      exit 1
+    fi
+    chmod 700 /etc/reposilite/update-guard.sh.new
+    mv /etc/reposilite/update-guard.sh.new /etc/reposilite/update-guard.sh
+    if ! grep -Fxq '# BEGIN REPOSILITE UPDATE GUARD' /etc/init.d/reposilite; then
+      INIT_TEMP="$(mktemp /etc/init.d/reposilite.guard.XXXXXX)"
+      cp -p /etc/init.d/reposilite "$INIT_TEMP"
+      {
+        printf '%s\n' "$INIT_FIRST" "$GUARD_BLOCK"
+        tail -n +2 /etc/init.d/reposilite
+      } >"$INIT_TEMP"
+      mv "$INIT_TEMP" /etc/init.d/reposilite
+    fi
+    if ! grep -q '^umask="0077"$' /etc/init.d/reposilite; then
+      printf '\numask="0077"\n' >>/etc/init.d/reposilite
+    fi
+    BACKUP_ROOT="/opt/reposilite-backups/$(date +%Y%m%d-%H%M%S)-$$"
+    rm -f "$UPDATE_AUTHORIZATION"
+    printf 'target_version=%s\nbackup=%s\n' "$RELEASE" "$BACKUP_ROOT" >"$RECOVERY_MARKER.new"
+    chmod 600 "$RECOVERY_MARKER.new"
+    mv "$RECOVERY_MARKER.new" "$RECOVERY_MARKER"
+    sync -f "$RECOVERY_MARKER"
+    printf '%s\n' "${BASHPID:-$$}" >"$UPDATE_AUTHORIZATION.new"
+    chmod 600 "$UPDATE_AUTHORIZATION.new"
+    mv "$UPDATE_AUTHORIZATION.new" "$UPDATE_AUTHORIZATION"
+
     msg_info "Stopping Reposilite for a consistent backup"
     if ! $STD rc-service reposilite stop; then
       rm -f /opt/reposilite/reposilite.jar.new
-      msg_error "Could not stop Reposilite; no application files were replaced"
+      rm -f "$UPDATE_AUTHORIZATION"
+      msg_error "Could not stop Reposilite; no application files were replaced. Automatic startup remains blocked by $RECOVERY_MARKER"
       exit 1
     fi
     msg_ok "Stopped Reposilite"
-    BACKUP_ROOT="/opt/reposilite-backups/$(date +%Y%m%d-%H%M%S)-$$"
     if ! install -d -m 700 "$BACKUP_ROOT"; then
       rm -f /opt/reposilite/reposilite.jar.new
       $STD rc-service reposilite start || true
-      msg_error "Reposilite: Could not create the backup directory; the previous JAR is unchanged"
+      rm -f "$UPDATE_AUTHORIZATION"
+      msg_error "Reposilite: Could not create the backup directory; the previous JAR is unchanged. Automatic startup remains blocked by $RECOVERY_MARKER"
       exit 1
     fi
     BACKUP_DIR="$BACKUP_ROOT/application"
     if ! (create_backup /opt/reposilite/reposilite.jar /root/.reposilite /etc/init.d/reposilite); then
       rm -f /opt/reposilite/reposilite.jar.new
       $STD rc-service reposilite start || true
-      msg_error "Reposilite: Application backup failed; the previous JAR is unchanged"
+      rm -f "$UPDATE_AUTHORIZATION"
+      msg_error "Reposilite: Application backup failed; the previous JAR is unchanged. Automatic startup remains blocked by $RECOVERY_MARKER"
       exit 1
     fi
     BACKUP_DIR="$BACKUP_ROOT/state"
@@ -124,18 +206,15 @@ function update_alpine() {
     if ! (create_backup "${STATE_PATHS[@]}"); then
       rm -f /opt/reposilite/reposilite.jar.new
       $STD rc-service reposilite start || true
-      msg_error "Reposilite: State backup failed; the previous JAR is unchanged"
+      rm -f "$UPDATE_AUTHORIZATION"
+      msg_error "Reposilite: State backup failed; the previous JAR is unchanged. Automatic startup remains blocked by $RECOVERY_MARKER"
       exit 1
     fi
     msg_info "Updating Reposilite"
     READY=no
-    if ! grep -q '^umask="0077"$' /etc/init.d/reposilite; then
-      printf '\numask="0077"\n' >>/etc/init.d/reposilite
-    fi
-    HEALTH_DEADLINE=$((SECONDS + 120))
+    HEALTH_DEADLINE=$((SECONDS + UPDATE_READINESS_TIMEOUT))
     if mv /opt/reposilite/reposilite.jar.new /opt/reposilite/reposilite.jar && $STD rc-service reposilite start; then
-      for ((i = 0; i < 60; i++)); do
-        [[ "$SECONDS" -lt "$HEALTH_DEADLINE" ]] || break
+      while [[ "$SECONDS" -lt "$HEALTH_DEADLINE" ]]; do
         if curl -fsS "${HEALTH_ARGS[@]}" --max-time 2 "$HEALTH_URL" >/dev/null 2>&1 &&
           ACTIVE_REPOSITORIES="$(curl -fsS "${HEALTH_ARGS[@]}" --max-time 2 --config - \
             "${HEALTH_URL%/}/api/maven/details" <<<"$UPDATE_AUTH" | jq -ce 'select(.type == "DIRECTORY") | [.files[].name] | sort')" &&
@@ -143,8 +222,10 @@ function update_alpine() {
           READY=yes
           while IFS= read -r REPOSITORY; do
             REPOSITORY_PATH="$(printf '%s' "$REPOSITORY" | jq -sRr @uri)"
+            STORAGE_PROBE_TIMEOUT=$((HEALTH_DEADLINE - SECONDS))
+            ((STORAGE_PROBE_TIMEOUT <= UPDATE_STORAGE_TIMEOUT)) || STORAGE_PROBE_TIMEOUT=$UPDATE_STORAGE_TIMEOUT
             if [[ "$SECONDS" -ge "$HEALTH_DEADLINE" ]] ||
-              ! REPOSITORY_DETAILS="$(curl -fsS "${HEALTH_ARGS[@]}" --max-time 2 --config - \
+              ! REPOSITORY_DETAILS="$(curl -fsS "${HEALTH_ARGS[@]}" --max-time "$STORAGE_PROBE_TIMEOUT" --config - \
                 "${HEALTH_URL%/}/api/maven/details/${REPOSITORY_PATH}" <<<"$UPDATE_AUTH")" ||
               ! jq -e '.type == "DIRECTORY"' <<<"$REPOSITORY_DETAILS" >/dev/null; then
               READY=no
@@ -161,12 +242,13 @@ function update_alpine() {
       rm -f /opt/reposilite/reposilite.jar.new
       BACKUP_DIR="$BACKUP_ROOT/application"
       restore_backup
-      msg_error "Reposilite application/storage readiness failed. Previous JAR restored, service stopped. State backup: $BACKUP_ROOT/state. Inspect logs and database compatibility before restarting."
+      rm -f "$UPDATE_AUTHORIZATION"
+      msg_error "Reposilite application/storage readiness failed. Previous JAR restored, service stopped and automatic startup blocked by $RECOVERY_MARKER. State backup: $BACKUP_ROOT/state. Inspect logs and database compatibility before recovery."
       exit 1
     fi
-    cat >/root/.reposilite <<EOF
-${RELEASE}
-EOF
+    printf '%s\n' "$RELEASE" >/root/.reposilite.new
+    mv /root/.reposilite.new /root/.reposilite
+    rm -f "$RECOVERY_MARKER" "$UPDATE_AUTHORIZATION"
     msg_ok "Updated Reposilite to ${RELEASE}; backup: ${BACKUP_ROOT}"
   else
     UPDATE_CHECK_STATUS=$?

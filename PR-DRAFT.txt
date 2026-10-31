@@ -29,6 +29,15 @@ configuration/data, back up application and local state after a clean stop, and
 authenticate a listing of each repository. Replacement/start/readiness failure
 restores the previous application and leaves it stopped for database review.
 The live database is never automatically rolled back across a possible migration.
+A persistent recovery marker also blocks OpenRC startup after an interrupted
+update or reboot until an administrator reviews the JAR/database state.
+
+Unattended updates use the Core-generated update entrypoint and PHS_SILENT.
+For standalone distribution, a separate SHA256-pinned update-apps adapter routes
+only reposilite/legacy metadata lookups here; other applications retain the
+official source root. Official update-lxcs handles Alpine packages separately.
+A disabled-by-default cron template and operator instructions are included.
+The unmodified official update-apps tool does not discover this standalone app.
 
 Proposed application files:
 - ct/reposilite.sh
@@ -36,9 +45,11 @@ Proposed application files:
 - json/reposilite.json
 - misc/reposilite-config.py
 - misc/DatabasePreflight.java
+- misc/reposilite-update-guard.sh
 
 The legacy standalone ct/alpine-reposilite.sh redirect is not proposed as a new
-upstream application. Standalone CI/tests/docs should be packaged separately
+upstream application. The standalone host adapter and cron template are not
+proposed as application files. Standalone CI/tests/docs should be packaged separately
 from the application files according to maintainer guidance.
 
 ## 🔗 Related PR / Issue
@@ -69,8 +80,9 @@ The metadata deliberately omits architectures, matching that Core state.
 
 Earlier baseline revisions were installed, rebooted and redeployed on Proxmox
 VE 9.1.6/amd64. Those results are historical and do not check either box above.
-Current evidence includes 50 automated tests, actual Reposilite 3.6.5/JDK 21
-checks, filesystem isolation tests, and MariaDB/PostgreSQL JDBC checks. Earlier
+Current evidence includes the automated suite (see TESTING.txt), actual
+Reposilite 3.6.5/JDK 21 checks, filesystem isolation tests, MariaDB/PostgreSQL JDBC checks, pinned
+official updater contracts, and the actual Core-generated entrypoint. Earlier
 Alpine Docker/OpenRC harness evidence is detailed in TESTING.txt; Docker was a
 test fixture only. A full current PVE run remains pending because the supplied
 host is unreachable. ARM64, Incus and cross-version migrations remain untested.
@@ -112,7 +124,9 @@ Review decisions still needed:
 - Keep the requested reposilite slug or agree on the upstream alpine- convention.
 - Change _CS_DEFAULT_URL to DevScripts in a future upstream branch. It currently
   points to the standalone repository intentionally; official ct-base fails as-is.
-- Agree on packaging the configuration and JDBC preflight helpers.
+- Agree on packaging the configuration, JDBC preflight and OpenRC guard helpers.
+- Review the separate standalone update-apps adapter. Once this application is
+  accepted upstream, the official catalog lookup should replace that adapter.
 - Review the Maven JAR exception: GitHub releases have no binary assets, and the
   generic URL deployment helper does not preserve the executable JAR as required.
   Current code preserves the executable JAR and verifies its official Maven checksum.

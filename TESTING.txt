@@ -194,3 +194,57 @@ Second implementation/Core audit (after a86112b, 2026-10-31):
 For official snapshots, compatibility findings and unresolved submission work,
 see COMPATIBILITY.txt. The prepared English PR title/body is in PR-DRAFT.txt.
 Current full PVE, Incus/ARM64 and cross-version migration limits remain unchanged.
+
+Unattended update integration (2026-10-31):
+- Complete local suite: 89 methods, 87 passed and two Linux-only checks skipped
+  on macOS. Those two checks passed separately in the actual Alpine/root fixture.
+  All five JDBC cases used the verified official 3.6.5 JAR and Java 21. Bash
+  syntax, ShellCheck and shfmt passed for all five tracked shell files.
+- The adapter is checked against SHA256-verified official ProxmoxVE
+  9b65262e4241e9c797e8113169c62a8ff8a659c3 update-apps/update-lxcs sources.
+  Tests run their actual lookup, release-parser and Alpine command sections with
+  mocked curl/pct. They verify canonical legacy metadata, mixed application
+  roots, unchanged unattended PHS_SILENT calls, preserved options/environment,
+  read-only rendering and refusal of altered source/hash/context.
+- The actual Core 5acac4483be88990354dd4e3778e2cdce4df428e
+  write_update_entrypoint function generates the entrypoint in an isolated bin
+  directory. That entrypoint and the real misc/update.sh run with a curl fixture:
+  unknown website state permits the recorded standalone source, PHS_SILENT is
+  retained, old-slug resolution succeeds, errors propagate, missing apps fail,
+  and an unavailable Core helper falls back to the recorded application root.
+- The actual official update-lxcs Alpine branch emits apk -U upgrade and never
+  invokes the application update command. This verifies the OS/application
+  distinction, not a real PVE batch or remote package-manager execution.
+- Recovery checks cover live/dead/malformed updater PIDs, root-only regular
+  authorization files, lock conflicts versus errors, safe service inspection,
+  marker removal, failed/interrupted updates and guarded init preservation.
+  Existing custom OpenRC hooks and permissions are kept. A pending marker blocks
+  a later unattended retry before downloads or service interruption.
+- Disposable Alpine 3.24 with real OpenRC 0.63.2 and a /bin/sleep daemon:
+  start/stop without a marker succeeded; a pending marker refused start, restart
+  and the default runlevel before a custom start_pre hook. A live authorized
+  updater holding flock could start; released locks, missing authorization and
+  dead PIDs were refused. The daemon inherited no updater lock FD9 and the lock
+  was available after updater exit. All 16 guard methods, including the two real
+  root/Linux flock/ownership cases, passed. The fixture was removed. This checks
+  OpenRC integration, not a full Reposilite or Proxmox lifecycle.
+- Storage probe timeouts are configurable and bounded by the remaining total
+  readiness deadline; invalid limits fail before service stop.
+- The cron command passes Bash syntax validation. With its empty default CTID
+  field it executes no update. No host cron or other schedule has been installed.
+- CI downloads/hash-verifies the official fixtures. It also runs the Linux
+  ownership/real-flock cases as root in a separate step, without a PVE host.
+
+To include official host-tool/Core contract checks locally, additionally set:
+
+  REPOSILITE_UPDATE_APPS_FIXTURE=/absolute/path/update-apps.sh
+  REPOSILITE_UPDATE_LXCS_FIXTURE=/absolute/path/update-lxcs.sh
+  REPOSILITE_TEST_CORE_ENTRYPOINT=/absolute/path/core.func
+  REPOSILITE_TEST_CORE_UPDATE=/absolute/path/core-update.sh
+
+Use the exact revisions/hashes in .github/workflows/check.yml. Without these
+four variables the optional official integration checks are skipped. Actual
+Proxmox pct selection, full-LXC backup/restore, cron execution, OS reboot and
+current end-to-end installation remain pending on a reachable host. Upstream
+update-apps dry-run can start stopped containers and repair legacy entrypoints;
+it must not be used as a read-only host probe. See AUTO-UPDATES.txt.

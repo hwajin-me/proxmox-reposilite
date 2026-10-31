@@ -87,6 +87,29 @@ Second audit findings fixed (after a86112b)
     It now uses curl_with_retry. A regression check verifies that a separate
     script-source override is honoured and the temporary helper is removed.
 
+Unattended update audit findings fixed
+
+16. High: a failed or interrupted update could leave a migrated database with
+    the previous JAR and an enabled OpenRC service. A reboot could silently
+    start that old JAR. A persistent recovery marker now blocks ordinary start
+    and restart until compatibility is reviewed. The guarded init is backed up
+    so rollback preserves protection. Only the live updater holding its lock
+    can start while the marker exists; success clears it after readiness.
+    No Core error or signal trap is replaced.
+
+17. Medium: a two-second repository storage probe rejected working but slow
+    S3 listings. Storage requests now have a configurable bounded timeout,
+    capped by the remaining total readiness budget. Dashboard/auth/list checks
+    remain short. Invalid timeout settings fail before service interruption.
+
+18. Compatibility: official update-apps rejects unknown standalone script slugs
+    before running /usr/bin/update. An explicit adapter verifies a fixed official
+    source SHA256/context and routes exactly the two metadata/existence lookups
+    for reposilite and alpine-reposilite. Other applications stay on official
+    roots. Official update-lxcs already supports Alpine OS upgrades separately.
+    Actual Core entrypoint/helper tests cover unknown catalog state, silent
+    mode, legacy resolution, recorded roots, fallback and error propagation.
+
 Community Scripts contracts checked
 
 - Current local-first Core bootstrap, independently overrideable script/Core
@@ -120,7 +143,8 @@ Standalone choices and future PR work
   experimental upstream; ARM64/Incus are not claimed tested.
 - Future PRs must follow the new-application DevScripts route, eligibility and
   AI-disclosure rules, and include truthful target-platform test evidence.
-- Current automated validation: 50 tests, including five actual-JAR JDBC checks.
+- The latest complete test count and automatic-update checks are in TESTING.txt,
+  including five actual-JAR JDBC checks.
   Separate real MariaDB/PostgreSQL preflight tests passed for empty/populated DBs and
   invalid credentials, preserving existing data. A current default-SQLite
   Alpine Docker/OpenRC harness install also passed repository/permission checks.
