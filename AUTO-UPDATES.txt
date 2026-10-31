@@ -132,8 +132,10 @@ Tests use actual pinned official source with mocked Proxmox commands, plus the
 real Core-generated entrypoint/update helper. They check source routing, legacy
 resolution, PHS_SILENT propagation, error statuses, the OS-only Alpine command
 and update/recovery behavior. These are not a current end-to-end PVE batch run.
-The supplied host remains unreachable; no host schedule was applied. See
-TESTING.txt for runtime fixture evidence and the current complete test count.
+A real amd64 PVE host additionally executed the adapter for one explicit
+Reposilite CT with PHS_SILENT preserved; the already-current path succeeded.
+No host app-update schedule was applied. See TESTING.txt for the separate real
+LXC install/update/reboot results, fixture evidence and current test count.
 
 Sources
 https://community-scripts.org/scripts/update-apps

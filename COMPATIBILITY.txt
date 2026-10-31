@@ -49,8 +49,10 @@ PASS  Persistent OpenRC recovery protection survives failed/killed updates and
       Core retains ownership of the update entrypoint and signal/error traps.
 NOTE  Cron templates are supplied but no host job is installed. Upstream dry-run
       can start stopped containers/repair a legacy entrypoint. See AUTO-UPDATES.txt.
-GAP   These host-tool checks use official source with mocked PVE commands; the
-      current complete install/batch-update/cron path still needs a real PVE run.
+PASS  The adapter also ran on real PVE 9.1.1/amd64 for one explicit CT in
+      unattended mode. Its already-current application path completed; no other
+      CT was selected and no app-update cron was installed. Full-LXC backup,
+      multi-CT batch recovery and scheduled execution remain unverified.
 
 Generator and architecture
 
@@ -61,7 +63,9 @@ NOTE  The official generator chooses official application repositories. Adding
       JSON here does not register this app in the official website's catalogue.
 PASS  var_arm64 is unset and architectures is omitted, matching the documented
       unverified state. ARM64 is not claimed supported; metadata lists PVE only.
-GAP   Current full PVE and any Incus/ARM64 installation remain unverified.
+PASS  Fresh Alpine 3.24.3/amd64 PVE deployment with external PostgreSQL, RustFS
+      S3 and native HTTPS passed, followed by a verified same-version update and
+      reboot. Incus/ARM64 and cross-version migrations remain unverified.
 
 Intentional standalone differences / future upstream changes
 
@@ -97,8 +101,8 @@ Evidence and limits
   Quoted uppercase user schemas cannot impersonate excluded system schemas.
 - Actual supported quota formats registered native providers. B/TB suffixes and
   signed-long overflow are rejected before container creation.
-- Earlier PVE and Docker/OpenRC fixture results are historical, with exact scope
-  in TESTING.txt. The currently supplied PVE host remains unreachable.
+- Earlier PVE and Docker/OpenRC fixture results remain historical. The new
+  PVE 9.1.1 deployment/update/reboot evidence has its own scope in TESTING.txt.
 - Existing dashboard settings are preserved. The installer cannot guarantee
   isolation after manual edits or detect every alias of mounted/remote storage.
 

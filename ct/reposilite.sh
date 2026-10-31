@@ -88,8 +88,30 @@ function update_alpine() {
     msg_error "Reposilite manager authentication/settings check failed; update saved credentials before retrying"
     exit 1
   fi
+  SQL_LOGGING_REPAIR=no
+  SQL_ARGUMENT_PATTERN='^[[:space:]]*command_args=[^#]* -jar '
+  if ! grep -Eq '^[[:space:]]*command_args=[^#]* -Dtinylog\.level@org\.jetbrains\.exposed=warn -jar ' /etc/init.d/reposilite; then
+    SQL_LOGGING_REPAIR=yes
+  fi
   if check_for_gh_release "reposilite" "dzikoysk/reposilite"; then
-    RELEASE="${CHECK_UPDATE_RELEASE#v}"
+    UPDATE_CHECK_STATUS=0
+  else
+    UPDATE_CHECK_STATUS=$?
+  fi
+  if [[ "$UPDATE_CHECK_STATUS" -ne 0 && "$UPDATE_CHECK_STATUS" -ne 1 ]]; then
+    msg_error "Reposilite release lookup failed; the running service is unchanged"
+    exit "$UPDATE_CHECK_STATUS"
+  fi
+  if [[ "$UPDATE_CHECK_STATUS" -eq 0 || "$SQL_LOGGING_REPAIR" == yes ]]; then
+    if [[ "$UPDATE_CHECK_STATUS" -eq 0 ]]; then
+      RELEASE="${CHECK_UPDATE_RELEASE#v}"
+    else
+      # A current installation still needs a verified restart to stop SQL DEBUG
+      # logging. Reuse the complete backup/recovery/readiness transaction below.
+      RELEASE="$(cat /root/.reposilite)"
+      RELEASE="${RELEASE#v}"
+      msg_info "Applying SQL logging protection to the current Reposilite version"
+    fi
     [[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
       msg_error "Invalid Reposilite release"
       exit 1
@@ -121,6 +143,11 @@ function update_alpine() {
     if [[ -L /etc/init.d/reposilite || "$INIT_FIRST" != '#!/sbin/openrc-run' ]]; then
       rm -f /opt/reposilite/reposilite.jar.new
       msg_error "Reposilite needs a regular OpenRC init script before updating; no service was stopped"
+      exit 1
+    fi
+    if [[ "$(grep -Ec "$SQL_ARGUMENT_PATTERN" /etc/init.d/reposilite || true)" != 1 ]]; then
+      rm -f /opt/reposilite/reposilite.jar.new
+      msg_error "Reposilite needs one standard command_args assignment containing -jar to protect SQL logs; no service was stopped"
       exit 1
     fi
     GUARD_BLOCK="$(
@@ -163,6 +190,24 @@ GUARD
     fi
     if ! grep -q '^umask="0077"$' /etc/init.d/reposilite; then
       printf '\numask="0077"\n' >>/etc/init.d/reposilite
+    fi
+    if [[ "$SQL_LOGGING_REPAIR" == yes ]]; then
+      INIT_TEMP="$(mktemp /etc/init.d/reposilite.logging.XXXXXX)"
+      cp -p /etc/init.d/reposilite "$INIT_TEMP"
+      while IFS= read -r INIT_LINE || [[ -n "$INIT_LINE" ]]; do
+        if [[ "$INIT_LINE" =~ $SQL_ARGUMENT_PATTERN ]]; then
+          # The last JVM property before -jar overrides an older narrow/debug
+          # setting while leaving custom OpenRC hooks and app arguments intact.
+          INIT_LINE="${INIT_LINE/ -jar / -Dtinylog.level@org.jetbrains.exposed=warn -jar }"
+        fi
+        printf '%s\n' "$INIT_LINE"
+      done </etc/init.d/reposilite >"$INIT_TEMP"
+      if ! sh -n "$INIT_TEMP"; then
+        rm -f "$INIT_TEMP" /opt/reposilite/reposilite.jar.new
+        msg_error "Could not prepare Reposilite SQL logging protection; no service was stopped"
+        exit 1
+      fi
+      mv "$INIT_TEMP" /etc/init.d/reposilite
     fi
     BACKUP_ROOT="/opt/reposilite-backups/$(date +%Y%m%d-%H%M%S)-$$"
     rm -f "$UPDATE_AUTHORIZATION"
@@ -252,12 +297,6 @@ GUARD
     mv /root/.reposilite.new /root/.reposilite
     rm -f "$RECOVERY_MARKER" "$UPDATE_AUTHORIZATION"
     msg_ok "Updated Reposilite to ${RELEASE}; backup: ${BACKUP_ROOT}"
-  else
-    UPDATE_CHECK_STATUS=$?
-    if [[ "$UPDATE_CHECK_STATUS" -ne 1 ]]; then
-      msg_error "Reposilite release lookup failed; the running service is unchanged"
-      exit "$UPDATE_CHECK_STATUS"
-    fi
   fi
   exit 0
 }

@@ -10,7 +10,10 @@ import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1] / "ct/reposilite.sh").read_text()
 GUARD_SOURCE = Path(__file__).resolve().parents[1] / "misc/reposilite-update-guard.sh"
-INIT_CONTENT = "#!/sbin/openrc-run\n# Custom service content\nstart_pre() { :; }\n"
+JVM_ARGUMENTS = 'command_args="${java_opts} -jar /opt/reposilite/reposilite.jar --port=8080"\n'
+CUSTOM_HOOKS = "# Custom service content\nstart_pre() { :; }\n"
+INIT_CONTENT = "#!/sbin/openrc-run\n" + JVM_ARGUMENTS + CUSTOM_HOOKS
+SQL_LOGGING_OPTION = "-Dtinylog.level@org.jetbrains.exposed=warn"
 UPDATE = SOURCE.split("function update_alpine() {", 1)[1].split("\nstart\n", 1)[0]
 UPDATE = "function update_alpine() {" + UPDATE
 MANAGER_SECRET = "test-only-manager-secret"
@@ -36,6 +39,7 @@ check_for_gh_release() {
   return 0
 }
 curl_with_retry() {
+  printf '%s\n' "$1" >>"$FIXTURE/download-urls"
   [[ "${FAULT:-}" != download ]] || return 1
   if [[ "$1" == */misc/reposilite-update-guard.sh ]]; then cp "$GUARD_SOURCE" "$2"; return; fi
   if [[ $# -gt 1 ]]; then printf new-jar >"$2"; else printf '%064d' 0; fi
@@ -151,7 +155,7 @@ class UpdateTests(unittest.TestCase):
         (root / "data").chmod(0o755)
         (root / "var/log/reposilite").chmod(0o755)
         (root / "opt/reposilite/reposilite.jar").write_text("old-jar")
-        (root / "etc/init.d/reposilite").write_text(custom_init)
+        (root / "etc/init.d/reposilite").write_text(custom_init.replace("@FIXTURE@", str(root)))
         (root / "etc/init.d/reposilite").chmod(0o751)
         (root / "root/.reposilite").write_text("3.6.4\n")
         config = f'data_directory="{root}/data"\nhttp_port=9093\nadmin_user="fixture-manager"\n'
@@ -216,7 +220,8 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(saved_journal[0].read_text(), "original-db-journal")
         saved_init = list((root / "opt/reposilite-backups").glob("*/application/files/**/init.d/reposilite"))
         self.assertIn("# BEGIN REPOSILITE UPDATE GUARD", saved_init[0].read_text())
-        self.assertIn(INIT_CONTENT.split("\n", 1)[1], saved_init[0].read_text())
+        self.assertIn(CUSTOM_HOOKS, saved_init[0].read_text())
+        self.assertIn(SQL_LOGGING_OPTION + " -jar", saved_init[0].read_text())
         self.assertIn('umask="0077"', (root / "etc/init.d/reposilite").read_text())
         self.assertEqual((root / "etc/init.d/reposilite").stat().st_mode & 0o777, 0o751)
         self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
@@ -245,13 +250,72 @@ class UpdateTests(unittest.TestCase):
                     self.assertFalse((root / "events").exists())
 
     def test_release_lookup_errors_remain_errors_without_stopping_service(self):
-        for fault, status in [("no-update", 0), ("release-dns", 6), ("release-api", 22), ("release-empty", 250)]:
+        for fault, status in [("release-dns", 6), ("release-api", 22), ("release-empty", 250)]:
             with self.subTest(fault=fault):
                 root, result = self.run_update(fault)
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertEqual((root / "service").read_text().strip(), "running")
                 self.assertFalse((root / "events").exists())
                 self.assertEqual((root / "opt/reposilite/reposilite.jar").read_text(), "old-jar")
+
+    def test_current_version_without_sql_protection_uses_complete_redeploy(self):
+        root, result = self.run_update("no-update")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((root / "events").read_text().splitlines(), ["stop", "start"])
+        self.assertEqual((root / "root/.reposilite").read_text(), "3.6.4\n")
+        self.assertIn("/3.6.4/reposilite-3.6.4-all.jar", (root / "download-urls").read_text())
+        self.assertEqual(len(list((root / "opt/reposilite-backups").glob("*/state/files/**/reposilite.db"))), 1)
+        self.assertIn(SQL_LOGGING_OPTION + " -jar", (root / "etc/init.d/reposilite").read_text())
+        self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
+
+    def test_current_protected_version_is_a_noop(self):
+        protected = INIT_CONTENT.replace(" -jar ", " " + SQL_LOGGING_OPTION + " -jar ")
+        root, result = self.run_update("no-update", custom_init=protected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((root / "events").exists())
+        self.assertFalse((root / "download-urls").exists())
+        self.assertEqual((root / "etc/init.d/reposilite").read_text(), protected)
+
+    def test_sql_protection_overrides_older_debug_option_and_preserves_hooks(self):
+        original = INIT_CONTENT.replace(" -jar ", " -Dtinylog.level@org.jetbrains.exposed=debug -jar ")
+        root, result = self.run_update(custom_init=original)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updated = (root / "etc/init.d/reposilite").read_text()
+        self.assertIn(CUSTOM_HOOKS, updated)
+        self.assertIn("-Dtinylog.level@org.jetbrains.exposed=debug " + SQL_LOGGING_OPTION + " -jar", updated)
+        self.assertEqual(updated.count(SQL_LOGGING_OPTION), 1)
+        self.assertEqual((root / "etc/init.d/reposilite").stat().st_mode & 0o777, 0o751)
+
+    def test_native_installer_guard_is_preserved_during_sql_repair(self):
+        installer = (Path(__file__).resolve().parents[1] / "install/reposilite-install.sh").read_text()
+        header = installer.split("cat >/etc/init.d/reposilite <<'EOF'\n", 1)[1].split('description=', 1)[0]
+        header = header.replace("/etc/", "@FIXTURE@/etc/")
+        root, result = self.run_update(custom_init=header + JVM_ARGUMENTS + CUSTOM_HOOKS)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updated = (root / "etc/init.d/reposilite").read_text()
+        self.assertTrue(updated.startswith(header.replace("@FIXTURE@", str(root))))
+        self.assertEqual(updated.count("# BEGIN REPOSILITE UPDATE GUARD"), 1)
+        self.assertIn(CUSTOM_HOOKS, updated)
+        self.assertIn(SQL_LOGGING_OPTION + " -jar", updated)
+
+    def test_logging_option_in_a_comment_does_not_suppress_current_version_repair(self):
+        original = INIT_CONTENT.replace('--port=8080"', '--port=8080" # ' + SQL_LOGGING_OPTION + ' -jar note')
+        root, result = self.run_update("no-update", custom_init=original)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((root / "events").read_text().splitlines(), ["stop", "start"])
+        self.assertIn('${java_opts} ' + SQL_LOGGING_OPTION + ' -jar', (root / "etc/init.d/reposilite").read_text())
+
+    def test_nonstandard_jvm_arguments_fail_before_service_or_init_changes(self):
+        multiline = 'command_args="${java_opts} ' + "\\\n" + '-jar /opt/reposilite/reposilite.jar"\n'
+        for args in ['command_args="@/etc/reposilite/java.args"\n', multiline,
+                     'command_args="@/etc/reposilite/java.args" # -jar unused\n']:
+            with self.subTest(args=args):
+                original = "#!/sbin/openrc-run\n" + args + CUSTOM_HOOKS
+                root, result = self.run_update(custom_init=original)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "events").exists())
+                self.assertEqual((root / "etc/init.d/reposilite").read_text(), original)
+                self.assertFalse((root / "etc/reposilite/update-in-progress").exists())
 
     def test_backup_failures_restart_the_unchanged_application(self):
         for fault in ["backup-root", "backup-application", "backup-state"]:
@@ -273,7 +337,8 @@ class UpdateTests(unittest.TestCase):
                 saved_db = list((root / "opt/reposilite-backups").glob("*/state/files/**/reposilite.db"))
                 self.assertEqual(saved_db[0].read_text(), "original-db")
                 restored_init = (root / "etc/init.d/reposilite").read_text()
-                self.assertIn(INIT_CONTENT.split("\n", 1)[1], restored_init)
+                self.assertIn(CUSTOM_HOOKS, restored_init)
+                self.assertIn(SQL_LOGGING_OPTION + " -jar", restored_init)
                 self.assertEqual(restored_init.count("# BEGIN REPOSILITE UPDATE GUARD"), 1)
                 self.assertTrue((root / "etc/reposilite/update-in-progress").exists())
                 self.assertFalse((root / "run/reposilite-update.authorized").exists())
@@ -349,12 +414,12 @@ class UpdateTests(unittest.TestCase):
                     os.kill(pid, 0)
 
     def test_custom_guard_reference_does_not_suppress_guard_injection(self):
-        original = '#!/sbin/openrc-run\n# Note: # BEGIN REPOSILITE UPDATE GUARD\ncustom_hook() { :; }\n'
+        original = '#!/sbin/openrc-run\n' + JVM_ARGUMENTS + '# Note: # BEGIN REPOSILITE UPDATE GUARD\ncustom_hook() { :; }\n'
         root, result = self.run_update("health", custom_init=original)
         self.assertNotEqual(result.returncode, 0)
         restored = (root / "etc/init.d/reposilite").read_text()
         self.assertIn('/etc/reposilite/update-guard.sh', restored)
-        self.assertIn(original.split("\n", 1)[1], restored)
+        self.assertIn('# Note: # BEGIN REPOSILITE UPDATE GUARD\ncustom_hook() { :; }\n', restored)
         self.assertTrue((root / "etc/reposilite/update-in-progress").exists())
 
     def test_invalid_timeout_values_fail_before_service_changes(self):

@@ -152,7 +152,7 @@ Reproduce the complete suite from this directory:
 
   REPOSILITE_TEST_JAR=/absolute/path/reposilite-3.6.5-all.jar REPOSILITE_TEST_JAVA=/absolute/path/jdk-21/bin/java python3 -m unittest discover -s tests -v
 
-Without REPOSILITE_TEST_JAR the five optional JDBC checks are skipped. CI
+Without REPOSILITE_TEST_JAR the optional JDBC and SQL logging checks are skipped. CI
 downloads the official fixture and verifies its publisher-provided SHA256.
 Local TLS tests require OpenSSL 3, as installed in Alpine; macOS's bundled
 LibreSSL does not provide the required hostname-check options. On Homebrew,
@@ -282,3 +282,43 @@ Managed native TLS backup regression (2026-11-01):
   The regression test removes the original generation after backup and verifies
   that the copied current link still resolves to both PEMs, with the private
   key remaining mode 0600. This tests backup completeness, not ACME issuance.
+
+Production deployment and SQL logging protection (2026-11-01):
+- Fresh unprivileged Alpine 3.24.3/amd64 LXC on Proxmox VE 9.1.1. The current
+  installer used Java 21 headless, a dedicated external PostgreSQL database,
+  dedicated RustFS S3 storage and provided native HTTPS PEMs. The actual server
+  connection used the requested SQL account and TLS 1.3. No local SQL server,
+  JDK or C toolchain remained.
+- Authenticated private artifact upload/download was byte-identical; anonymous
+  access was refused. A forced same-version 3.6.5 redeployment through the real
+  Core entrypoint, then a CT reboot, preserved native settings, manager access,
+  artifact bytes and configuration/certificate hashes. Backups included the
+  managed certificate generation under a mode-0700 parent. A separate external
+  PostgreSQL dump was taken. Test artifacts were deleted. This does not validate
+  cross-version migration or production failure recovery.
+- The reviewed host update-apps adapter ran for exactly one explicit CT with
+  unattended choices, no automatic reboot and no full-LXC backup. It reached
+  the standalone updater and succeeded on the already-current path. Official
+  website probes returned 404 for this uncatalogued standalone app, and Core
+  correctly continued using its recorded source. No app-update cron was enabled.
+- Upstream 3.6.5's DEBUG SQL logger can record native settings, including S3
+  credentials. Its bundled mute rule covers the old Exposed package, while the
+  current logger runs under org.jetbrains.exposed.v1. The installer and updater
+  now force -Dtinylog.level@org.jetbrains.exposed=warn before -jar. Previously
+  unprotected current versions use the complete verified backup/redeploy path;
+  already-protected current versions stay a no-op. Custom OpenRC hooks/mode and
+  the recovery guard survive the repair and application rollback.
+- The production option was applied before credential rotation/settings edits;
+  the affected archived log was scrubbed and the dedicated S3 IAM was rotated.
+  Previous credentials were revoked, current artifacts stayed readable, and
+  active/archived logs contained neither old/new S3 credentials nor the manager
+  secret. These deployment credentials and evidence are outside this public repo.
+- Complete local suite: 103 methods, 101 passed and two Linux-only checks skipped
+  on macOS. Those two ran successfully in an isolated Linux/root Docker fixture.
+  The actual verified JAR and all pinned official fixtures were supplied.
+  Two real-JAR logger tests reproduce DEBUG output with the upstream default,
+  then verify DEBUG suppression and retained WARN output with the override.
+  Bash syntax, ShellCheck, shfmt and whitespace validation passed.
+
+Tinylog system-property configuration reference:
+https://tinylog.org/configuration/

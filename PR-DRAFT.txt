@@ -33,6 +33,10 @@ New installs retain a headless Java 21 runtime after the one-time JDBC preflight
 and remove only known setup files after authenticated repository readiness.
 A persistent recovery marker also blocks OpenRC startup after an interrupted
 update or reboot until an administrator reviews the JAR/database state.
+Exposed SQL DEBUG logging is suppressed because upstream 3.6.5 can include
+storage credentials in settings writes. Existing unprotected installations use
+the same verified update transaction to apply the protection at their current
+version. Managed native TLS generations are included in state backups.
 
 Unattended updates use the Core-generated update entrypoint and PHS_SILENT.
 For standalone distribution, a separate SHA256-pinned update-apps adapter routes
@@ -62,7 +66,7 @@ https://github.com/hwajin-me/proxmox-reposilite
 ## ✅ Prerequisites
 
 - [x] Implementation self-review and regression checks completed.
-- [ ] Current revision verified end-to-end on the actual Proxmox target.
+- [x] Current installer and update path verified on an actual amd64 Proxmox target.
 - [ ] Standalone source-root/naming/helper exceptions resolved for upstream.
 - [x] No production credentials or host-specific configuration committed.
 
@@ -77,17 +81,20 @@ The metadata deliberately omits architectures, matching that Core state.
 
 ## 🖥️ Tested on
 
-- [ ] Proxmox VE: current complete revision, fresh install/reboot/update/recovery.
+- [x] Proxmox VE 9.1.1/amd64: fresh Alpine install, native integrations, same-version update and reboot.
 - [ ] Incus: current complete revision.
 
-Earlier baseline revisions were installed, rebooted and redeployed on Proxmox
-VE 9.1.6/amd64. Those results are historical and do not check either box above.
-Current evidence includes the automated suite (see TESTING.txt), actual
+The new Alpine 3.24.3 deployment used external PostgreSQL, dedicated RustFS S3
+storage and native HTTPS. Manager authentication and private artifact bytes
+survived the same-version JAR update and reboot; the state backup included the
+external CertMate certificate generation. Earlier PVE 9.1.6 results remain
+historical. Current evidence also includes the automated suite (see TESTING.txt), actual
 Reposilite 3.6.5/JDK 21 checks, filesystem isolation tests, MariaDB/PostgreSQL JDBC checks, pinned
 official updater contracts, and the actual Core-generated entrypoint. Earlier
 Alpine Docker/OpenRC harness evidence is detailed in TESTING.txt; Docker was a
-test fixture only. A full current PVE run remains pending because the supplied
-host is unreachable. ARM64, Incus and cross-version migrations remain untested.
+test fixture only. Production fault injection and cross-version recovery were
+not attempted; failure/rollback evidence comes from isolated fixtures.
+ARM64, Incus and cross-version migrations remain untested.
 
 ## 🛠️ Type of Change
 
@@ -134,8 +141,8 @@ Review decisions still needed:
   Current code preserves the executable JAR and verifies its official Maven checksum.
 - Native self-signed TLS uses Python/OpenSSL because the actual Alpine helper
   does not expose create_self_signed_cert. No nginx workaround is proposed.
-- Complete current Proxmox installation, native integrations, reboot, update and
-  failure-recovery validation, then have the author review these declarations.
+- Review the documented production and fixture validation scopes, resolve the
+  upstream conventions, and have the author review these declarations.
 
 Upstream 3.6.5 Dockerfile, docker-compose.yml and .env were inspected. They use
 Java 21, port 8080, a persistent data volume and Java/application options. This

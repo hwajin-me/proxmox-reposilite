@@ -74,6 +74,12 @@ Updates and data
   the service configuration is at state/files/etc/conf.d/reposilite. A full
   Proxmox backup remains the recovery path for repositories and external data.
 
+  Java explicitly limits org.jetbrains.exposed SQL logging to WARN. Upstream
+  3.6.5 otherwise logs settings updates, including storage credentials, at DEBUG.
+  Existing installations missing this protection receive a verified same-version
+  deployment through the normal backup/recovery path even when already current.
+  Audit older logs and rotate any exposed credentials separately.
+
   The data and log directories are mode 0700; OpenRC starts Java with umask 0077.
   SQLite can contain plaintext LDAP/S3 secrets, so keep the whole data directory
   private. Updates also repair permissions on the default SQLite database and
@@ -245,6 +251,8 @@ Native DB, external storage, LDAP and TLS
     supplied in trustedCertificates as PEM strings; guided setup reads CA files
     from the Proxmox host and imports them into a private JVM truststore while
     preserving system CAs. Certificate/hostname verification stays enabled.
+    Changing the LDAP ssl mode in the dashboard requires a Reposilite restart:
+    the native authenticator captures its ldap/ldaps protocol at construction.
 
     LDAP users authenticate with their directory username/password and receive
     mapped access tokens. They do not automatically receive manager or repository
@@ -259,9 +267,10 @@ Native DB, external storage, LDAP and TLS
     before this exclusion must add it in the dashboard themselves. For uid and
     manager maintainer, combine your filter with (!(uid=maintainer)) using AND.
     There is no automatic LDAP group-to-permission mapping.
-    Upstream token
-    authentication can accept a previously issued persistent token independently
-    of LDAP; choose mapped token type deliberately and review token revocation.
+    Upstream checks local token authentication before LDAP. A previously issued
+    mapped token can therefore authenticate independently of a new directory bind;
+    TEMPORARY is not a promise of immediate AD password/disable revocation. Choose
+    the mapped type deliberately and revoke issued tokens when access is removed.
     OIDC has no native setting in the verified Reposilite release and is excluded.
 
   Native TLS:

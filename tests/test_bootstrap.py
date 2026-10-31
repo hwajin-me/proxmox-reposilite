@@ -1,6 +1,7 @@
 """Ensure rejected API calls cannot leave installer credentials on disk."""
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -60,6 +61,20 @@ curl() {
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_service_filters_all_exposed_sql_packages_before_jar(self):
+        init = SOURCE.split("cat >/etc/init.d/reposilite <<'EOF'", 1)[1].split("\nEOF", 1)[0]
+        assignment = next(line for line in init.splitlines() if line.startswith('command_args='))
+        # Existing user JVM arguments may set a less restrictive threshold;
+        # the installer property must be the final JVM option before -jar.
+        result = subprocess.run(["sh", "-c",
+                                 'java_opts="-Xmx256m -Dtinylog.level@org.jetbrains.exposed=debug"; '
+                                 + assignment + '; printf "%s" "$command_args"'],
+                                capture_output=True, text=True, check=True)
+        arguments = shlex.split(result.stdout)
+        jar = arguments.index("-jar")
+        self.assertEqual(arguments[jar - 1], "-Dtinylog.level@org.jetbrains.exposed=warn")
+        self.assertIn("--local-configuration=/etc/reposilite/configuration.cdn", arguments[jar + 1:])
+
     def run_seed(self, fault=""):
         temporary = tempfile.TemporaryDirectory(prefix="reposilite-bootstrap-")
         self.addCleanup(temporary.cleanup)
